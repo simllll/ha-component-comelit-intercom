@@ -1,72 +1,142 @@
-"""Test service for Comelit connection."""
+"""Diagnostic services for the Comelit Intercom integration.
+
+These services are for debugging/inspection. Each opens a one-shot
+connection to the device and RETURNS the result (Developer Tools ->
+Actions shows the response), so you can verify connectivity, auth, and
+see exactly which doors/actuators the bridge reports — without guessing.
+"""
+
+from __future__ import annotations
 
 import logging
 
-from homeassistant.core import HomeAssistant, ServiceCall
+import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
+from homeassistant.core import (
+    HomeAssistant,
+    ServiceCall,
+    ServiceResponse,
+    SupportsResponse,
+)
 
 from .comelit_client import IconaBridgeClient
-from .const import DOMAIN
+from .const import DEFAULT_PORT, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+SERVICE_TEST_CONNECTION = "test_connection"
+SERVICE_TEST_AUTHENTICATE = "test_authenticate"
+SERVICE_TEST_GET_CONFIG = "test_get_config"
 
-async def async_setup_test_service(hass: HomeAssistant):
-    """Set up test service."""
+_BASE_SCHEMA = {
+    vol.Required("ip"): cv.string,
+    vol.Optional("port", default=DEFAULT_PORT): cv.port,
+}
+CONNECTION_SCHEMA = vol.Schema(_BASE_SCHEMA)
+AUTH_SCHEMA = vol.Schema({**_BASE_SCHEMA, vol.Required("token"): cv.string})
 
-    async def handle_test_connection(call: ServiceCall):
-        """Handle test connection service."""
-        ip = call.data.get("ip")
-        token = call.data.get("token")
 
-        if not ip:
-            _LOGGER.error("IP address is required")
-            hass.states.async_set(
-                f"{DOMAIN}.test_result", "error", {"message": "IP address is required"}
-            )
-            return
+async def async_setup_test_service(hass: HomeAssistant) -> None:
+    """Register the diagnostic services (once per HA instance)."""
 
-        if not token:
-            _LOGGER.error("Token is required")
-            hass.states.async_set(
-                f"{DOMAIN}.test_result", "error", {"message": "Token is required"}
-            )
-            return
-
-        _LOGGER.info(f"Testing connection to {ip}")
-
-        client = IconaBridgeClient(ip, token)
+    async def handle_test_connection(call: ServiceCall) -> ServiceResponse:
+        """Open a raw TCP connection and report success/failure."""
+        ip = call.data["ip"]
+        port = call.data["port"]
+        client = IconaBridgeClient(ip, port)
         try:
             await client.connect()
-            _LOGGER.info("Connected successfully!")
-
-            if await client.authenticate():
-                _LOGGER.info("Authenticated successfully!")
-                doors = await client.list_doors()
-                _LOGGER.info(f"Found {len(doors)} doors: {doors}")
-
-                hass.states.async_set(
-                    f"{DOMAIN}.test_result",
-                    "success",
-                    {"doors": doors, "message": f"Found {len(doors)} doors"},
-                )
-            else:
-                _LOGGER.error("Authentication failed")
-                hass.states.async_set(
-                    f"{DOMAIN}.test_result",
-                    "auth_failed",
-                    {"message": "Authentication failed"},
-                )
-
+            return {"connected": True, "host": ip, "port": port}
+        except Exception as err:  # noqa: BLE001 - surface any error to the caller
+            _LOGGER.warning("test_connection to %s:%s failed: %s", ip, port, err)
+            return {"connected": False, "host": ip, "port": port, "error": str(err)}
+        finally:
             await client.shutdown()
 
-        except Exception as e:
-            _LOGGER.error(f"Connection failed: {e}")
-            hass.states.async_set(
-                f"{DOMAIN}.test_result", "connection_failed", {"message": str(e)}
-            )
+    async def handle_test_authenticate(call: ServiceCall) -> ServiceResponse:
+        """Connect and authenticate; return the auth response code."""
+        ip = call.data["ip"]
+        port = call.data["port"]
+        token = call.data["token"]
+        client = IconaBridgeClient(ip, port)
+        try:
+            await client.connect()
+            auth_code = await client.authenticate(token)
+            return {
+                "connected": True,
+                "auth_code": auth_code,
+                "authenticated": auth_code == 200,
+            }
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("test_authenticate to %s:%s failed: %s", ip, port, err)
+            return {"connected": False, "authenticated": False, "error": str(err)}
+        finally:
+            await client.shutdown()
+
+    async def handle_test_get_config(call: ServiceCall) -> ServiceResponse:
+        """Connect, authenticate and return the discovered directory.
+
+        Returns the doors, actuators and entrances the bridge reports,
+        plus the raw list of user-parameter keys (handy when a device
+        exposes openers under an unexpected address book).
+        """
+        ip = call.data["ip"]
+        port = call.data["port"]
+        token = call.data["token"]
+        client = IconaBridgeClient(ip, port)
+        try:
+            await client.connect()
+            auth_code = await client.authenticate(token)
+            if auth_code != 200:
+                return {
+                    "authenticated": False,
+                    "auth_code": auth_code,
+                    "error": "Authentication failed",
+                }
+
+            config = await client.get_config("all")
+            if not config or "vip" not in config:
+                return {"authenticated": True, "error": "No configuration returned"}
+
+            user_params = config["vip"].get("user-parameters", {})
+            doors = user_params.get("opendoor-address-book", [])
+            actuators = user_params.get("actuator-address-book", [])
+            entrances = user_params.get("entrance-address-book", [])
+            return {
+                "authenticated": True,
+                "user_parameter_keys": sorted(user_params.keys()),
+                "door_count": len(doors),
+                "actuator_count": len(actuators),
+                "doors": doors,
+                "actuators": actuators,
+                "entrances": entrances,
+            }
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("test_get_config to %s:%s failed: %s", ip, port, err)
+            return {"error": str(err)}
+        finally:
+            await client.shutdown()
 
     hass.services.async_register(
-        DOMAIN, "test_connection", handle_test_connection, schema=None
+        DOMAIN,
+        SERVICE_TEST_CONNECTION,
+        handle_test_connection,
+        schema=CONNECTION_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_TEST_AUTHENTICATE,
+        handle_test_authenticate,
+        schema=AUTH_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_TEST_GET_CONFIG,
+        handle_test_get_config,
+        schema=AUTH_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
     )
 
-    _LOGGER.info("Test service registered")
+    _LOGGER.debug("Comelit diagnostic services registered")
