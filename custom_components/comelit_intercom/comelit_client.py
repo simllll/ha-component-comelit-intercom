@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import struct
+import time
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any
@@ -72,8 +73,9 @@ class IconaBridgeClient:
         self.writer: asyncio.StreamWriter | None = None
         self.open_channels: dict[str, ChannelData] = {}
         # Start with a semi-random request ID to avoid conflicts
-        # The device tracks requests by ID, so we need unique values
-        self.request_id = 8000 + int(asyncio.get_event_loop().time() * 10) % 1000
+        # The device tracks requests by ID, so we need unique values.
+        # Use time.monotonic() so this works without a running event loop.
+        self.request_id = 8000 + int(time.monotonic() * 10) % 1000
 
     async def connect(self):
         """Connect to the ICONA Bridge"""
@@ -391,6 +393,61 @@ class IconaBridgeClient:
         await self._close_channel(channel)
         return None
 
+    async def get_server_info(self) -> dict | None:
+        """Fetch server-info (model, firmware, serial, capabilities)."""
+        channel = await self._open_channel(Channel.INFO)
+        info_data = {
+            "message": "server-info",
+            "message-type": "request",
+            "message-id": ViperChannelType.SERVER_INFO,
+        }
+        packet = self._create_json_packet(channel.id, info_data)
+        await self._write_packet(packet)
+
+        response = await self._read_response()
+        if response and response["type"] == "json":
+            await self._close_channel(channel)
+            return response["data"]
+        await self._close_channel(channel)
+        return None
+
+    async def register_push_token(
+        self,
+        fcm_token: str,
+        apt_address: str,
+        apt_subaddress: int,
+        os_type: str = "android",
+        bundle_id: str = "com.comelit.bigapp",
+        profile_id: str = "3",
+    ) -> int:
+        """Enroll a push token with the device (push-info on the PUSH channel).
+
+        This tells the intercom where to deliver ring notifications via the
+        Comelit cloud (FCM/APNS). Returns the response-code (200 on success).
+        """
+        channel = await self._open_channel(Channel.PUSH)
+
+        push_data = {
+            "apt-address": apt_address,
+            "apt-subaddress": apt_subaddress,
+            "bundle-id": bundle_id,
+            "message": "push-info",
+            "message-id": 2,
+            "os-type": os_type,
+            "profile-id": profile_id,
+            "device-token": fcm_token,
+            "message-type": "request",
+        }
+        packet = self._create_json_packet(channel.id, push_data)
+        await self._write_packet(packet)
+
+        response = await self._read_response()
+        code = 500
+        if response and response["type"] == "json":
+            code = response["data"].get("response-code", 500)
+        await self._close_channel(channel)
+        return code
+
     async def list_doors(self) -> list[dict]:
         """List all available doors"""
         config = await self.get_config("all")
@@ -534,6 +591,76 @@ class IconaBridgeClient:
         # Don't wait for final responses - the door actuator triggers immediately
         # and the device may not send acknowledgments
         self.logger.info(f"Door '{door_item.get('name', 'Unknown')}' open command sent")
+
+    async def list_actuators(self) -> list[dict]:
+        """List all available actuators (gates/barriers/relays)."""
+        config = await self.get_config("all")
+        if config and "vip" in config:
+            return (
+                config["vip"]
+                .get("user-parameters", {})
+                .get("actuator-address-book", [])
+            )
+        return []
+
+    async def open_actuator(self, vip: dict, actuator_item: dict):
+        """Trigger a ViP actuator (e.g. pedestrian gate, garage barrier).
+
+        Actuators use a DIFFERENT command sequence than opendoor entries
+        (ported from madchicken/comelit-client openActuator):
+        1. Open the CTPP control channel (shared with door opening)
+        2. Send the actuator-specific init message (0x45 0xbe family)
+        3. Send OPEN then CONFIRM actuator commands
+        """
+        # Initialise control channel if needed (same as door opening)
+        if Channel.CTPP not in self.open_channels:
+            await self._open_door_init(vip)
+
+        channel = self.open_channels[Channel.CTPP]
+
+        apt = vip["apt-address"]
+        out = actuator_item["output-index"]
+        act_apt = actuator_item["apt-address"]
+
+        # Actuator-specific initialisation message
+        init_buffers = [
+            bytes([0xC0, 0x18, 0x45, 0xBE]),  # actuator init (vs 0x5c/0x70 for doors)
+            bytes([0x8F, 0x5C, 0x00, 0x04]),
+            bytes([0x00, 0x20, 0xFF, 0x01]),
+            bytes([0xFF, 0xFF, 0xFF, 0xFF]),  # broadcast/wildcard
+            self._string_to_buffer(f"{apt}{out}", True),
+            self._string_to_buffer(f"{act_apt}", True),
+            NULL,
+        ]
+        await self._write_packet(
+            self._create_binary_packet_from_buffers(channel.id, *init_buffers)
+        )
+        # Init responses often timeout on some firmware - that's fine
+        try:
+            await asyncio.wait_for(self._read_response(), timeout=2.0)
+            await asyncio.wait_for(self._read_response(), timeout=2.0)
+        except TimeoutError:
+            self.logger.warning(
+                "Timeout waiting for actuator init responses - continuing anyway"
+            )
+
+        def create_actuator_message(confirm: bool = False) -> bytes:
+            # 0x00 = OPEN, 0x20 = CONFIRM (both required)
+            buffers = [
+                bytes([0x20 if confirm else 0x00, 0x18, 0x45, 0xBE]),
+                bytes([0x8F, 0x5C, 0x00, 0x04]),
+                bytes([0xFF, 0xFF, 0xFF, 0xFF]),
+                self._string_to_buffer(f"{apt}{out}", True),
+                self._string_to_buffer(f"{act_apt}", True),
+                NULL,
+            ]
+            return self._create_binary_packet_from_buffers(channel.id, *buffers)
+
+        await self._write_packet(create_actuator_message(False))  # OPEN
+        await self._write_packet(create_actuator_message(True))  # CONFIRM
+        self.logger.info(
+            f"Actuator '{actuator_item.get('name', 'Unknown')}' open command sent"
+        )
 
 
 # High-level convenience functions

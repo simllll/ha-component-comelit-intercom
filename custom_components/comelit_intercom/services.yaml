@@ -1,16 +1,89 @@
 test_connection:
-  name: Test Connection
-  description: Test connection to Comelit device
+  name: Test connection
+  description: >-
+    Open a raw TCP connection to the ICONA bridge and return whether it
+    succeeded. Use this to confirm the device is reachable on the port.
   fields:
     ip:
-      name: IP Address
-      description: IP address of the Comelit device
-      required: false
-      default: ""
+      name: IP address
+      description: IP address of the Comelit device.
+      required: true
       example: "192.168.1.100"
+      selector:
+        text:
+    port:
+      name: Port
+      description: ICONA bridge TCP port.
+      required: false
+      default: 64100
+      example: 64100
+      selector:
+        number:
+          min: 1
+          max: 65535
+          mode: box
+
+test_authenticate:
+  name: Test authentication
+  description: >-
+    Connect and authenticate with a token, returning the auth response
+    code (200 = success).
+  fields:
+    ip:
+      name: IP address
+      description: IP address of the Comelit device.
+      required: true
+      example: "192.168.1.100"
+      selector:
+        text:
+    port:
+      name: Port
+      description: ICONA bridge TCP port.
+      required: false
+      default: 64100
+      example: 64100
+      selector:
+        number:
+          min: 1
+          max: 65535
+          mode: box
     token:
       name: Token
-      description: Authentication token
+      description: 32-character ICONA token.
+      required: true
+      example: "0123456789abcdef0123456789abcdef"
+      selector:
+        text:
+
+test_get_config:
+  name: Test get configuration
+  description: >-
+    Connect, authenticate and return the directory the bridge reports:
+    doors, actuators, entrances and the raw user-parameter keys. Handy to
+    see exactly what will become buttons (and what address book they live in).
+  fields:
+    ip:
+      name: IP address
+      description: IP address of the Comelit device.
+      required: true
+      example: "192.168.1.100"
+      selector:
+        text:
+    port:
+      name: Port
+      description: ICONA bridge TCP port.
       required: false
-      default: ""
-      example: "your_token_here"
+      default: 64100
+      example: 64100
+      selector:
+        number:
+          min: 1
+          max: 65535
+          mode: box
+    token:
+      name: Token
+      description: 32-character ICONA token.
+      required: true
+      example: "0123456789abcdef0123456789abcdef"
+      selector:
+        text:

@@ -1,11 +1,16 @@
-"""Button platform for Comelit integration."""
+"""Lock platform for Comelit doors and gates.
+
+Exposes each door/actuator as a LockEntity supporting OPEN, so it works nicely
+with dashboards and voice ("open/unlock the front door"). The openers are
+momentary relay pulses with no state feedback, so the lock always reports
+locked and simply triggers the pulse on unlock/open.
+"""
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-from homeassistant.components.button import ButtonEntity
+from homeassistant.components.lock import LockEntity, LockEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -13,46 +18,58 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .coordinator import ComelitDataUpdateCoordinator
 from .entity import ComelitEntity
 
-_LOGGER = logging.getLogger(__name__)
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Comelit button entities."""
+    """Set up Comelit lock entities."""
     coordinator: ComelitDataUpdateCoordinator = entry.runtime_data
 
-    entities = []
+    entities: list[LockEntity] = []
     for door in coordinator.data.get("doors", []):
-        entities.append(ComelitDoorButton(coordinator, door))
+        entities.append(ComelitDoorLock(coordinator, door))
     for actuator in coordinator.data.get("actuators", []):
-        entities.append(ComelitActuatorButton(coordinator, actuator))
-
+        entities.append(ComelitActuatorLock(coordinator, actuator))
     async_add_entities(entities)
 
 
-class ComelitDoorButton(ComelitEntity, ButtonEntity):
-    """Representation of a Comelit door button."""
+class _ComelitOpenerLock(ComelitEntity, LockEntity):
+    """Base momentary-opener lock (always locked; unlock/open triggers a pulse)."""
+
+    _attr_supported_features = LockEntityFeature.OPEN
+
+    @property
+    def is_locked(self) -> bool:
+        """Momentary opener has no state; always report locked."""
+        return True
+
+    async def async_lock(self, **kwargs: Any) -> None:
+        """No-op: the opener cannot be actively locked."""
+
+    async def async_unlock(self, **kwargs: Any) -> None:
+        """Trigger the opener (same as open)."""
+        await self.async_open(**kwargs)
+
+
+class ComelitDoorLock(_ComelitOpenerLock):
+    """A Comelit door as a lock."""
 
     _attr_icon = "mdi:door-open"
 
     def __init__(
-        self,
-        coordinator: ComelitDataUpdateCoordinator,
-        door: dict[str, Any],
+        self, coordinator: ComelitDataUpdateCoordinator, door: dict[str, Any]
     ) -> None:
-        """Initialize the button."""
+        """Initialize."""
         super().__init__(coordinator)
         self._door = door
         self._attr_name = door.get("name", "Unknown Door")
-
         door_id = f"{door.get('apt-address', '')}_{door.get('output-index', '')}"
-        self._attr_unique_id = f"{coordinator.entry.unique_id}_{door_id}"
+        self._attr_unique_id = f"{coordinator.entry.unique_id}_lock_{door_id}"
 
-    async def async_press(self) -> None:
-        """Handle the button press."""
+    async def async_open(self, **kwargs: Any) -> None:
+        """Open the door."""
         await self.coordinator.async_open_door(self._door.get("name", ""))
 
     @property
@@ -63,31 +80,26 @@ class ComelitDoorButton(ComelitEntity, ButtonEntity):
         ]
 
 
-class ComelitActuatorButton(ComelitEntity, ButtonEntity):
-    """Representation of a Comelit ViP actuator (gate/barrier) button."""
+class ComelitActuatorLock(_ComelitOpenerLock):
+    """A Comelit ViP actuator (gate/barrier) as a lock."""
 
     _attr_icon = "mdi:gate"
 
     def __init__(
-        self,
-        coordinator: ComelitDataUpdateCoordinator,
-        actuator: dict[str, Any],
+        self, coordinator: ComelitDataUpdateCoordinator, actuator: dict[str, Any]
     ) -> None:
-        """Initialize the button."""
+        """Initialize."""
         super().__init__(coordinator)
         self._actuator = actuator
         self._attr_name = actuator.get("name", "Unknown Actuator")
-
-        # Namespaced to avoid clashing with door buttons that share
-        # apt-address/output-index.
         actuator_id = (
             f"actuator_{actuator.get('apt-address', '')}"
             f"_{actuator.get('output-index', '')}"
         )
-        self._attr_unique_id = f"{coordinator.entry.unique_id}_{actuator_id}"
+        self._attr_unique_id = f"{coordinator.entry.unique_id}_lock_{actuator_id}"
 
-    async def async_press(self) -> None:
-        """Handle the button press."""
+    async def async_open(self, **kwargs: Any) -> None:
+        """Open the gate/barrier."""
         await self.coordinator.async_open_actuator(self._actuator.get("name", ""))
 
     @property

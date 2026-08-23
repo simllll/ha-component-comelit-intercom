@@ -6,24 +6,36 @@ This is a native Home Assistant integration for Comelit intercom systems (using 
 
 - Direct TCP communication with Comelit intercom devices (no MQTT bridge needed)
 - **Automatic token extraction** - no manual token retrieval required (if using default password)
-- Automatic discovery of all available doors
-- Creates button entities for each door
+- Automatic discovery of all available **doors and gates/actuators**
+- **Button** entities for each door and each ViP actuator (gate/barrier)
+- 🔔 **Real-time doorbell/ring events** via Comelit cloud push (FCM) — an
+  `event` entity (device class *doorbell*) plus a `comelit_intercom_doorbell`
+  bus event for automations
+- **Sensors**: connectivity, ring-notification status, "ringing" (with
+  auto-off), and last-ring timestamp
+- **Device diagnostics** (model / firmware / serial) and downloadable
+  config-entry diagnostics
+- **Options flow** to toggle ring notifications and choose the push identity
 - Simple configuration through Home Assistant UI
 - Works with Comelit intercom models that support the ICONA Bridge protocol
 
 ## Requirements
 
 - Home Assistant 2023.1 or newer
-- Comelit intercom with WiFi connectivity (e.g., Comelit 6741W, 6721W)
+- Comelit intercom with WiFi connectivity (e.g., Comelit 6741W, 6721W, 6742W)
 - Comelit device IP address
 - Device must be accessible on port 64100 (ICONA Bridge) and port 8080 (web interface for token extraction)
+- For **doorbell ring notifications**: the intercom **and** Home Assistant need
+  internet access (rings are delivered via Comelit's cloud → Firebase Cloud
+  Messaging, not over the local network). The `firebase-messaging` Python
+  package is installed automatically.
 
 ## Installation
 
 ### HACS Installation (recommended)
 
 1. Ensure you have [HACS](https://hacs.xyz/) installed and set up
-2. Add this repository's URL, `https://github.com/nicolas-fricke/ha-component-comelit-intercom`, as custom repository and select "Integration" (see [docs](https://hacs.xyz/docs/faq/custom_repositories/))
+2. Add this repository's URL, `https://github.com/simllll/ha-component-comelit-intercom`, as custom repository and select "Integration" (see [docs](https://hacs.xyz/docs/faq/custom_repositories/))
 3. Seach for "Comelit Intercom" and click on "Download"
 4. After this is complete, restart Home Assistant
 
@@ -60,18 +72,63 @@ https://github.com/madchicken/comelit-client/wiki/Get-your-user-token-for-ICONA-
 
 ## Usage
 
-After configuration, the integration will:
-1. Connect to your Comelit device
-2. Authenticate using your token
-3. Discover all available doors
-4. Create a button entity for each door (e.g., `button.comelit_front_door_unlatch`)
+After configuration, the integration will connect, authenticate, discover your
+doors/gates, and create the entities below.
+
+### Entities
+
+| Entity | Type | Notes |
+|--------|------|-------|
+| Door / gate openers | `button` | One per door and per ViP actuator (gate/barrier) |
+| Door / gate locks | `lock` (supports *open*) | Same openers as locks — nicer for dashboards/voice ("open the door") |
+| Doorbell | `event` (device class *doorbell*) | Fires `ring` on an incoming call |
+| Connectivity | `binary_sensor` (connectivity) | Whether the ICONA bridge is reachable |
+| Ring notifications | `binary_sensor` (diagnostic) | Whether cloud push is registered/running |
+| Ringing | `binary_sensor` (sound) | On during a ring, auto-clears after 30 s |
+| Last ring | `sensor` (timestamp) | Time of the most recent ring |
+| Ring count | `sensor` (total increasing) | Number of rings (persists across restarts) |
+
+> Openers appear as **both** a `button` and a `lock`. Use whichever fits your
+> dashboard/automations and disable the other if you like.
 
 You can then:
-- Add door buttons to your dashboard
-- Create automations to open doors based on events
-- Use with voice assistants ("Hey Google, press the front door button")
-- Include in scripts and scenes
-- Trigger from presence detection, NFC tags, etc.
+- Add door/gate buttons to your dashboard
+- Automate on the doorbell: trigger on the `event` entity, or on the
+  `comelit_intercom_doorbell` bus event (payload includes `call_id`)
+- Use with voice assistants and include in scripts/scenes
+- Trigger door opening from presence detection, NFC tags, etc.
+
+### Doorbell ring notifications (cloud push)
+
+On current Comelit firmware, ring events are **not** delivered over the local
+network — the intercom notifies apps through Comelit's cloud via Firebase Cloud
+Messaging (FCM). This integration registers a push token with the Comelit app's
+Firebase project, enrolls it with your intercom, and turns incoming ring pushes
+into Home Assistant events.
+
+- **Requires internet** on both the intercom and Home Assistant.
+- Enabled by default. Toggle it in the integration's **Configure** (options) dialog.
+- **Push identity (advanced):** by default the push token is enrolled under the
+  same identity as your control token. If that clashes with a paired phone
+  (the phone stops getting notifications), set a *different* ICONA token in the
+  **Push identity token** option so the phone keeps its own registration.
+
+### Options
+
+Open the integration → **Configure**:
+- **Doorbell ring notifications** — enable/disable cloud push.
+- **Push identity token** — optional; enroll push under a different identity.
+
+## Known limitations
+
+- **Ring events require internet** (Comelit cloud → FCM); there is no local ring
+  delivery on current firmware (a held local socket receives nothing, verified).
+- **No door/gate open-state** — the gates are momentary relay pulses and the
+  device reports no persistent open/closed state, so opener entities are
+  `button`s, not locks/covers.
+- **Video is not yet supported.** The door camera on current firmware uses a
+  WebRTC/cloud-signalled stream tied to an active call; a native camera entity
+  is a work in progress.
 
 ## How It Works
 
