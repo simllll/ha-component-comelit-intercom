@@ -80,11 +80,16 @@ doors/gates, and create the entities below.
 | Entity | Type | Notes |
 |--------|------|-------|
 | Door / gate openers | `button` | One per door and per ViP actuator (gate/barrier) |
+| Door / gate locks | `lock` (supports *open*) | Same openers as locks — nicer for dashboards/voice ("open the door") |
 | Doorbell | `event` (device class *doorbell*) | Fires `ring` on an incoming call |
 | Connectivity | `binary_sensor` (connectivity) | Whether the ICONA bridge is reachable |
 | Ring notifications | `binary_sensor` (diagnostic) | Whether cloud push is registered/running |
 | Ringing | `binary_sensor` (sound) | On during a ring, auto-clears after 30 s |
 | Last ring | `sensor` (timestamp) | Time of the most recent ring |
+| Ring count | `sensor` (total increasing) | Number of rings (persists across restarts) |
+
+> Openers appear as **both** a `button` and a `lock`. Use whichever fits your
+> dashboard/automations and disable the other if you like.
 
 You can then:
 - Add door/gate buttons to your dashboard

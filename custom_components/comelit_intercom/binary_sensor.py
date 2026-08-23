@@ -12,9 +12,9 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .coordinator import ComelitDataUpdateCoordinator
+from .entity import ComelitEntity
 from .fcm_push import signal_doorbell
 
 # How long the "ringing" sensor stays on after a ring (no reliable call-end
@@ -36,12 +36,9 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class ComelitConnectivitySensor(
-    CoordinatorEntity[ComelitDataUpdateCoordinator], BinarySensorEntity
-):
+class ComelitConnectivitySensor(ComelitEntity, BinarySensorEntity):
     """Reports whether the ICONA bridge is reachable and authenticating."""
 
-    _attr_has_entity_name = True
     _attr_name = "Connectivity"
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -50,7 +47,6 @@ class ComelitConnectivitySensor(
         """Initialize."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.unique_id}_connectivity"
-        self._attr_device_info = coordinator.device_info
 
     @property
     def is_on(self) -> bool:
@@ -63,12 +59,9 @@ class ComelitConnectivitySensor(
         return True
 
 
-class ComelitPushStatusSensor(
-    CoordinatorEntity[ComelitDataUpdateCoordinator], BinarySensorEntity
-):
+class ComelitPushStatusSensor(ComelitEntity, BinarySensorEntity):
     """Diagnostic: whether cloud-push ring notifications are active."""
 
-    _attr_has_entity_name = True
     _attr_name = "Ring notifications"
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -78,7 +71,6 @@ class ComelitPushStatusSensor(
         """Initialize."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.unique_id}_push_status"
-        self._attr_device_info = coordinator.device_info
 
     @property
     def is_on(self) -> bool:
