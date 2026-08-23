@@ -12,7 +12,14 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .comelit_client import IconaBridgeClient
-from .const import CONF_HOST, CONF_TOKEN, DOMAIN, UPDATE_INTERVAL
+from .const import (
+    CONF_HOST,
+    CONF_PORT,
+    CONF_TOKEN,
+    DEFAULT_PORT,
+    DOMAIN,
+    UPDATE_INTERVAL,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -24,8 +31,9 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Initialize."""
         self.entry = entry
         self.host = entry.data[CONF_HOST]
+        self.port = entry.data.get(CONF_PORT, DEFAULT_PORT)
         self.token = entry.data[CONF_TOKEN]
-        self.client = IconaBridgeClient(self.host)
+        self.client = IconaBridgeClient(self.host, self.port)
         self.vip_config: dict[str, Any] = {}
 
         super().__init__(
@@ -77,7 +85,7 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Open a specific door."""
         # Create a separate client instance for door operations
         # to avoid interfering with the coordinator's update cycle
-        door_client = IconaBridgeClient(self.host)
+        door_client = IconaBridgeClient(self.host, self.port)
         try:
             await door_client.connect()
 
@@ -105,7 +113,7 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_open_actuator(self, actuator_name: str) -> None:
         """Trigger a specific actuator (gate/barrier)."""
         # Separate client instance, like door operations
-        actuator_client = IconaBridgeClient(self.host)
+        actuator_client = IconaBridgeClient(self.host, self.port)
         try:
             await actuator_client.connect()
 

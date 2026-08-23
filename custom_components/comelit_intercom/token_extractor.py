@@ -130,7 +130,7 @@ async def extract_token(
 async def extract_token_from_backup(backup_data: bytes) -> str | None:
     """Extract token from backup archive."""
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _extract():
             with tempfile.TemporaryDirectory() as tmpdir:

@@ -7,43 +7,38 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
 
 from .const import DOMAIN
 from .coordinator import ComelitDataUpdateCoordinator
-from .test_service import async_setup_test_service
+from .test_service import SERVICE_TEST_CONNECTION, async_setup_test_service
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.BUTTON]
 
+# Config entry with the coordinator attached as runtime_data.
+type ComelitConfigEntry = ConfigEntry[ComelitDataUpdateCoordinator]
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+
+async def async_setup_entry(hass: HomeAssistant, entry: ComelitConfigEntry) -> bool:
     """Set up Comelit from a config entry."""
     coordinator = ComelitDataUpdateCoordinator(hass, entry)
 
-    # Fetch initial data
+    # Fetch initial data (raises ConfigEntryNotReady on failure)
     await coordinator.async_config_entry_first_refresh()
 
-    if not coordinator.data:
-        raise ConfigEntryNotReady("Failed to connect to Comelit device")
-
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = coordinator
+    # Store the coordinator on the config entry (modern runtime_data pattern)
+    entry.runtime_data = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Set up test service (only once)
-    if "test_service_setup" not in hass.data.get(DOMAIN, {}):
+    # Register the diagnostic services once per HA instance
+    if not hass.services.has_service(DOMAIN, SERVICE_TEST_CONNECTION):
         await async_setup_test_service(hass)
-        hass.data[DOMAIN]["test_service_setup"] = True
 
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: ComelitConfigEntry) -> bool:
     """Unload a config entry."""
-    if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        hass.data[DOMAIN].pop(entry.entry_id)
-
-    return unload_ok
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

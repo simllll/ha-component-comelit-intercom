@@ -4,6 +4,7 @@ DOMAIN = "comelit_intercom"
 
 # Configuration keys
 CONF_HOST = "host"
+CONF_PORT = "port"
 CONF_TOKEN = "token"
 
 # Default values

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import struct
+import time
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any
@@ -72,8 +73,9 @@ class IconaBridgeClient:
         self.writer: asyncio.StreamWriter | None = None
         self.open_channels: dict[str, ChannelData] = {}
         # Start with a semi-random request ID to avoid conflicts
-        # The device tracks requests by ID, so we need unique values
-        self.request_id = 8000 + int(asyncio.get_event_loop().time() * 10) % 1000
+        # The device tracks requests by ID, so we need unique values.
+        # Use time.monotonic() so this works without a running event loop.
+        self.request_id = 8000 + int(time.monotonic() * 10) % 1000
 
     async def connect(self):
         """Connect to the ICONA Bridge"""

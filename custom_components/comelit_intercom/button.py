@@ -24,7 +24,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Comelit button entities."""
-    coordinator: ComelitDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: ComelitDataUpdateCoordinator = entry.runtime_data
 
     # Create button entities for each door
     entities = []
