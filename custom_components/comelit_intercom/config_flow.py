@@ -15,7 +15,12 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 
 from .comelit_client import IconaBridgeClient
-from .const import DEFAULT_PORT, DOMAIN
+from .const import (
+    CONF_ENABLE_NOTIFICATIONS,
+    CONF_PUSH_TOKEN,
+    DEFAULT_PORT,
+    DOMAIN,
+)
 from .token_extractor import extract_token
 
 _LOGGER = logging.getLogger(__name__)
@@ -141,6 +146,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    @staticmethod
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> OptionsFlowHandler:
+        """Return the options flow."""
+        return OptionsFlowHandler()
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -188,3 +200,32 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "token_help": "Leave token empty to try automatic extraction"
             },
         )
+
+
+class OptionsFlowHandler(config_entries.OptionsFlow):
+    """Handle options: doorbell push notifications."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Manage the options."""
+        if user_input is not None:
+            # Drop an empty push-token override so it falls back to the main token.
+            if not user_input.get(CONF_PUSH_TOKEN):
+                user_input.pop(CONF_PUSH_TOKEN, None)
+            return self.async_create_entry(title="", data=user_input)
+
+        options = self.config_entry.options
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_ENABLE_NOTIFICATIONS,
+                    default=options.get(CONF_ENABLE_NOTIFICATIONS, True),
+                ): bool,
+                vol.Optional(
+                    CONF_PUSH_TOKEN,
+                    description={"suggested_value": options.get(CONF_PUSH_TOKEN, "")},
+                ): str,
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema)

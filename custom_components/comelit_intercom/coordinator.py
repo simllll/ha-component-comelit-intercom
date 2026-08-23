@@ -9,6 +9,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .comelit_client import IconaBridgeClient
@@ -35,12 +36,27 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.token = entry.data[CONF_TOKEN]
         self.client = IconaBridgeClient(self.host, self.port)
         self.vip_config: dict[str, Any] = {}
+        self.server_info: dict[str, Any] = {}
+        # Set by __init__.py when push notifications are enabled.
+        self.push_manager = None
 
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
             update_interval=timedelta(seconds=UPDATE_INTERVAL),
+        )
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Shared device info, enriched with server-info when available."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.entry.unique_id)},
+            name=f"Comelit Intercom ({self.host})",
+            manufacturer="Comelit",
+            model=self.server_info.get("model", "ICONA Bridge"),
+            sw_version=self.server_info.get("version"),
+            serial_number=self.server_info.get("serial-code"),
         )
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -54,6 +70,15 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raise ConfigEntryAuthFailed(
                     f"Authentication failed with code {auth_code}"
                 )
+
+            # Fetch device info once (model / firmware / serial).
+            if not self.server_info:
+                try:
+                    info = await self.client.get_server_info()
+                    if info:
+                        self.server_info = info
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.debug("server-info fetch failed: %s", err)
 
             # Get configuration
             config = await self.client.get_config("all")

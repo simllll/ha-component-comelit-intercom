@@ -393,6 +393,61 @@ class IconaBridgeClient:
         await self._close_channel(channel)
         return None
 
+    async def get_server_info(self) -> dict | None:
+        """Fetch server-info (model, firmware, serial, capabilities)."""
+        channel = await self._open_channel(Channel.INFO)
+        info_data = {
+            "message": "server-info",
+            "message-type": "request",
+            "message-id": ViperChannelType.SERVER_INFO,
+        }
+        packet = self._create_json_packet(channel.id, info_data)
+        await self._write_packet(packet)
+
+        response = await self._read_response()
+        if response and response["type"] == "json":
+            await self._close_channel(channel)
+            return response["data"]
+        await self._close_channel(channel)
+        return None
+
+    async def register_push_token(
+        self,
+        fcm_token: str,
+        apt_address: str,
+        apt_subaddress: int,
+        os_type: str = "android",
+        bundle_id: str = "com.comelit.bigapp",
+        profile_id: str = "3",
+    ) -> int:
+        """Enroll a push token with the device (push-info on the PUSH channel).
+
+        This tells the intercom where to deliver ring notifications via the
+        Comelit cloud (FCM/APNS). Returns the response-code (200 on success).
+        """
+        channel = await self._open_channel(Channel.PUSH)
+
+        push_data = {
+            "apt-address": apt_address,
+            "apt-subaddress": apt_subaddress,
+            "bundle-id": bundle_id,
+            "message": "push-info",
+            "message-id": 2,
+            "os-type": os_type,
+            "profile-id": profile_id,
+            "device-token": fcm_token,
+            "message-type": "request",
+        }
+        packet = self._create_json_packet(channel.id, push_data)
+        await self._write_packet(packet)
+
+        response = await self._read_response()
+        code = 500
+        if response and response["type"] == "json":
+            code = response["data"].get("response-code", 500)
+        await self._close_channel(channel)
+        return code
+
     async def list_doors(self) -> list[dict]:
         """List all available doors"""
         config = await self.get_config("all")

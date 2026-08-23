@@ -24,5 +24,20 @@
     "abort": {
       "already_configured": "Device is already configured"
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Comelit Intercom options",
+        "data": {
+          "enable_notifications": "Doorbell ring notifications (cloud push)",
+          "push_token": "Push identity token (optional)"
+        },
+        "data_description": {
+          "enable_notifications": "Receive real-time ring events via Comelit's cloud (FCM). Requires the device to have internet access.",
+          "push_token": "Advanced: enroll push under a different ICONA token so a paired phone keeps its own notifications. Leave empty to use the main token."
+        }
+      }
+    }
   }
 }
