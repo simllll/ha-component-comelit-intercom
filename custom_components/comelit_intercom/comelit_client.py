@@ -535,6 +535,76 @@ class IconaBridgeClient:
         # and the device may not send acknowledgments
         self.logger.info(f"Door '{door_item.get('name', 'Unknown')}' open command sent")
 
+    async def list_actuators(self) -> list[dict]:
+        """List all available actuators (gates/barriers/relays)."""
+        config = await self.get_config("all")
+        if config and "vip" in config:
+            return (
+                config["vip"]
+                .get("user-parameters", {})
+                .get("actuator-address-book", [])
+            )
+        return []
+
+    async def open_actuator(self, vip: dict, actuator_item: dict):
+        """Trigger a ViP actuator (e.g. pedestrian gate, garage barrier).
+
+        Actuators use a DIFFERENT command sequence than opendoor entries
+        (ported from madchicken/comelit-client openActuator):
+        1. Open the CTPP control channel (shared with door opening)
+        2. Send the actuator-specific init message (0x45 0xbe family)
+        3. Send OPEN then CONFIRM actuator commands
+        """
+        # Initialise control channel if needed (same as door opening)
+        if Channel.CTPP not in self.open_channels:
+            await self._open_door_init(vip)
+
+        channel = self.open_channels[Channel.CTPP]
+
+        apt = vip["apt-address"]
+        out = actuator_item["output-index"]
+        act_apt = actuator_item["apt-address"]
+
+        # Actuator-specific initialisation message
+        init_buffers = [
+            bytes([0xC0, 0x18, 0x45, 0xBE]),  # actuator init (vs 0x5c/0x70 for doors)
+            bytes([0x8F, 0x5C, 0x00, 0x04]),
+            bytes([0x00, 0x20, 0xFF, 0x01]),
+            bytes([0xFF, 0xFF, 0xFF, 0xFF]),  # broadcast/wildcard
+            self._string_to_buffer(f"{apt}{out}", True),
+            self._string_to_buffer(f"{act_apt}", True),
+            NULL,
+        ]
+        await self._write_packet(
+            self._create_binary_packet_from_buffers(channel.id, *init_buffers)
+        )
+        # Init responses often timeout on some firmware - that's fine
+        try:
+            await asyncio.wait_for(self._read_response(), timeout=2.0)
+            await asyncio.wait_for(self._read_response(), timeout=2.0)
+        except TimeoutError:
+            self.logger.warning(
+                "Timeout waiting for actuator init responses - continuing anyway"
+            )
+
+        def create_actuator_message(confirm: bool = False) -> bytes:
+            # 0x00 = OPEN, 0x20 = CONFIRM (both required)
+            buffers = [
+                bytes([0x20 if confirm else 0x00, 0x18, 0x45, 0xBE]),
+                bytes([0x8F, 0x5C, 0x00, 0x04]),
+                bytes([0xFF, 0xFF, 0xFF, 0xFF]),
+                self._string_to_buffer(f"{apt}{out}", True),
+                self._string_to_buffer(f"{act_apt}", True),
+                NULL,
+            ]
+            return self._create_binary_packet_from_buffers(channel.id, *buffers)
+
+        await self._write_packet(create_actuator_message(False))  # OPEN
+        await self._write_packet(create_actuator_message(True))  # CONFIRM
+        self.logger.info(
+            f"Actuator '{actuator_item.get('name', 'Unknown')}' open command sent"
+        )
+
 
 # High-level convenience functions
 async def list_doors(host: str, token: str) -> list[dict[str, Any]]:

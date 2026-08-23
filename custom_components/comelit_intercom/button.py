@@ -33,6 +33,12 @@ async def async_setup_entry(
     for door in doors:
         entities.append(ComelitDoorButton(coordinator, door))
 
+    # Create button entities for each actuator (gates/barriers)
+    actuators = coordinator.data.get("actuators", [])
+
+    for actuator in actuators:
+        entities.append(ComelitActuatorButton(coordinator, actuator))
+
     async_add_entities(entities)
 
 
@@ -74,3 +80,48 @@ class ComelitDoorButton(CoordinatorEntity[ComelitDataUpdateCoordinator], ButtonE
         return self.coordinator.last_update_success and self._door.get("name") in [
             d.get("name") for d in self.coordinator.data.get("doors", [])
         ]
+
+
+class ComelitActuatorButton(
+    CoordinatorEntity[ComelitDataUpdateCoordinator], ButtonEntity
+):
+    """Representation of a Comelit ViP actuator (gate/barrier) button."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:gate"
+
+    def __init__(
+        self,
+        coordinator: ComelitDataUpdateCoordinator,
+        actuator: dict[str, Any],
+    ) -> None:
+        """Initialize the button."""
+        super().__init__(coordinator)
+        self._actuator = actuator
+        self._attr_name = actuator.get("name", "Unknown Actuator")
+
+        # Unique ID based on host + actuator address/output (namespaced to avoid
+        # clashing with door buttons that share apt-address/output-index)
+        actuator_id = (
+            f"actuator_{actuator.get('apt-address', '')}"
+            f"_{actuator.get('output-index', '')}"
+        )
+        self._attr_unique_id = f"{coordinator.entry.unique_id}_{actuator_id}"
+
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, coordinator.entry.unique_id)},
+            name=f"Comelit Intercom ({coordinator.host})",
+            manufacturer="Comelit",
+            model="ICONA Bridge",
+        )
+
+    async def async_press(self) -> None:
+        """Handle the button press."""
+        await self.coordinator.async_open_actuator(self._actuator.get("name", ""))
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return self.coordinator.last_update_success and self._actuator.get(
+            "name"
+        ) in [a.get("name") for a in self.coordinator.data.get("actuators", [])]

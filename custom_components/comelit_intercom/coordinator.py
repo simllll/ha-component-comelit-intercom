@@ -53,11 +53,15 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raise UpdateFailed("Failed to get configuration from device")
 
             self.vip_config = config["vip"]
-            doors = self.vip_config.get("user-parameters", {}).get(
-                "opendoor-address-book", []
-            )
+            user_params = self.vip_config.get("user-parameters", {})
+            doors = user_params.get("opendoor-address-book", [])
+            actuators = user_params.get("actuator-address-book", [])
 
-            return {"doors": doors, "vip": self.vip_config}
+            return {
+                "doors": doors,
+                "actuators": actuators,
+                "vip": self.vip_config,
+            }
 
         except ConfigEntryAuthFailed:
             # Re-raise auth errors
@@ -97,3 +101,29 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         finally:
             # Always clean up the door client connection
             await door_client.shutdown()
+
+    async def async_open_actuator(self, actuator_name: str) -> None:
+        """Trigger a specific actuator (gate/barrier)."""
+        # Separate client instance, like door operations
+        actuator_client = IconaBridgeClient(self.host)
+        try:
+            await actuator_client.connect()
+
+            auth_code = await actuator_client.authenticate(self.token)
+            if auth_code != 200:
+                raise Exception(f"Authentication failed with code {auth_code}")
+
+            actuators = self.data.get("actuators", [])
+            actuator = next(
+                (a for a in actuators if a.get("name") == actuator_name), None
+            )
+            if not actuator:
+                raise Exception(f"Actuator '{actuator_name}' not found")
+
+            await actuator_client.open_actuator(self.vip_config, actuator)
+
+        except Exception as err:
+            _LOGGER.error("Error opening actuator %s: %s", actuator_name, err)
+            raise
+        finally:
+            await actuator_client.shutdown()
