@@ -271,6 +271,115 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
+    # --- reauth / reconfigure -------------------------------------------
+
+    def _reauth_schema(
+        self, entry: config_entries.ConfigEntry, include_host: bool
+    ) -> vol.Schema:
+        """Schema for reauth/reconfigure; pre-fills the current token so it's
+        visible and editable."""
+        fields: dict[Any, Any] = {}
+        if include_host:
+            fields[vol.Required(CONF_HOST, default=entry.data.get(CONF_HOST))] = str
+            fields[
+                vol.Optional(
+                    CONF_PORT, default=entry.data.get(CONF_PORT, DEFAULT_PORT)
+                )
+            ] = cv.port
+        fields[vol.Optional(CONF_WEB_PASSWORD, default=DEFAULT_WEB_PASSWORD)] = str
+        fields[vol.Optional(CONF_USER_MATCH)] = str
+        fields[
+            vol.Optional(
+                CONF_TOKEN,
+                description={"suggested_value": entry.data.get(CONF_TOKEN, "")},
+            )
+        ] = str
+        return vol.Schema(fields)
+
+    def _merge_credentials(
+        self, entry: config_entries.ConfigEntry, user_input: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Overlay user-supplied credentials on the existing entry data.
+
+        A blank token forces re-resolution (auto-provision or dedicated-user
+        extraction) instead of reusing a possibly-stale token.
+        """
+        data = dict(entry.data)
+        for key in (CONF_HOST, CONF_PORT, CONF_WEB_PASSWORD, CONF_USER_MATCH, CONF_TOKEN):
+            val = user_input.get(key)
+            if val not in (None, ""):
+                data[key] = val
+        if not user_input.get(CONF_TOKEN):
+            data.pop(CONF_TOKEN, None)
+            if not user_input.get(CONF_USER_MATCH):
+                data.pop(CONF_USER_MATCH, None)
+        return data
+
+    async def _reauth_reconfigure(
+        self,
+        step_id: str,
+        entry: config_entries.ConfigEntry,
+        user_input: dict[str, Any] | None,
+        include_host: bool,
+        abort_reason: str,
+    ) -> FlowResult:
+        """Shared handler for the reauth and reconfigure steps."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                info = await validate_input(
+                    self.hass, self._merge_credentials(entry, user_input)
+                )
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except InvalidAuth as err:
+                errors["base"] = (
+                    "auto_token_failed"
+                    if "auto-provision" in str(err) or "extract" in str(err)
+                    else "invalid_auth"
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Unexpected error during %s", step_id)
+                errors["base"] = "unknown"
+            else:
+                new_data = self._merge_credentials(entry, user_input)
+                if info.get("token"):
+                    new_data[CONF_TOKEN] = info["token"]
+                new_data.pop(CONF_USER_MATCH, None)
+                new_data.pop(CONF_WEB_PASSWORD, None)
+                return self.async_update_reload_and_abort(
+                    entry, data=new_data, reason=abort_reason
+                )
+
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=self._reauth_schema(entry, include_host),
+            errors=errors,
+            description_placeholders={"host": entry.data.get(CONF_HOST, "")},
+        )
+
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> FlowResult:
+        """Handle re-authentication (triggered by ConfigEntryAuthFailed)."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Confirm re-authentication with fresh credentials."""
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        return await self._reauth_reconfigure(
+            "reauth_confirm", entry, user_input, False, "reauth_successful"
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Let the user change host/credentials without removing the entry."""
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        return await self._reauth_reconfigure(
+            "reconfigure", entry, user_input, True, "reconfigure_successful"
+        )
+
 
 class OptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options: doorbell push notifications."""

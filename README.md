@@ -80,6 +80,13 @@ Advanced alternatives:
   from a device backup instead of creating one.
 - **Token** — paste an existing 32-char user token directly.
 
+### Re-authenticating / changing the token
+
+If the token stops working, Home Assistant prompts you to **re-authenticate** —
+leave the token blank to auto-provision a fresh user, or paste a new one; no
+reinstall needed. You can also open the integration's **Reconfigure** dialog at
+any time to change the IP or view/edit the current token.
+
 > **Fully local.** The integration mints its token on the LAN by generating an
 > activation code in the device's web UI and redeeming it on the ICONA bridge —
 > the same handshake the app uses, minus the cloud round-trip. Everything the
