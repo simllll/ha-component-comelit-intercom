@@ -13,6 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import ComelitDataUpdateCoordinator
 from .entity import ComelitEntity
+from .events import address_matches
 from .fcm_push import signal_doorbell
 
 EVENT_TYPES = ["ring", "missed_call"]
@@ -44,7 +45,7 @@ async def async_setup_entry(
                 coordinator,
                 key=f"entrance_{addr}",
                 name=ent.get("name") or "Entrance",
-                matcher=lambda c, a=addr: c == a,
+                matcher=lambda c, a=addr: address_matches(c, a),
             )
         )
 
@@ -54,7 +55,7 @@ async def async_setup_entry(
             coordinator,
             key="floor",
             name="Floor call",
-            matcher=lambda c, a=apt: bool(a) and bool(c) and c.startswith(a),
+            matcher=lambda c, a=apt: address_matches(c, a),
         )
     )
 
