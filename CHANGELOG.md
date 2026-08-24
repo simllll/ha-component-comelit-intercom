@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.6.1](https://github.com/simllll/hass-comelit-icona/compare/v1.6.0...v1.6.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* single shared video call for stream + stills, recycle dead calls ([#19](https://github.com/simllll/hass-comelit-icona/issues/19)) ([7e932c1](https://github.com/simllll/hass-comelit-icona/commit/7e932c12a4644ff1de75ceea294823ef14307a7d))
+
 ## [1.6.0](https://github.com/simllll/hass-comelit-icona/compare/v1.5.1...v1.6.0) (2026-08-24)
 
 
