@@ -89,8 +89,12 @@ class ComelitEntranceCamera(ComelitEntity, Camera):
         if payload.get("source") == "cloud" or caller == self._entrance:
             self.hass.async_create_task(self._refresh(force=True))
 
-    async def async_stream_source(self) -> str | None:
-        """Return the local RTSP URL for live view (starts the call if needed)."""
+    async def stream_source(self) -> str | None:
+        """Return the local RTSP URL for live view (starts the call if needed).
+
+        Note: Home Assistant's Camera base class calls ``stream_source`` — this
+        method name must match exactly for live streaming to work.
+        """
         return await self.coordinator.stream.async_stream_source(self._entrance)
 
     async def async_camera_image(
