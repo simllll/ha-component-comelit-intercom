@@ -115,6 +115,15 @@ The **caller** VIP address in the frame identifies the source: an entrance panel
 (e.g. `00000100`) vs the apartment's own floor/"Etagen" station (`apt-address` +
 sub, e.g. `00000B060`).
 
+**Addressing differs by system mode.** Apartment-block systems (e.g. 6742W,
+`model: MnWi`) use plain numeric addresses (`00000100`). **Kit / single-house
+mode** (e.g. 6741W, `model: MSVF`) uses an **`S` mode prefix** in the
+configuration address book (`SB100001` entrance, `SB000001` apartment,
+`SBIO0255` actuator), but the ring frame reports the caller **without** that
+prefix (`B100001`). So caller↔address-book comparisons must tolerate a
+dropped-prefix mismatch — the integration matches by equality / either-direction
+prefix / either-direction suffix (`address_matches`).
+
 > **Identity matters:** the wall-monitor token (`local-monitor-dev`) is already
 > held by the physical monitor, so a duplicate registration is kicked. Use a
 > dedicated app-class identity (see §5). The official app registers then closes
