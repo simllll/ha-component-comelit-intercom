@@ -45,6 +45,31 @@ def signal_source(entry_id: str) -> str:
     return f"{DOMAIN}_events_source_{entry_id}"
 
 
+def address_matches(caller: str | None, addr: str | None) -> bool:
+    """Return True if a ring's caller address refers to ``addr``.
+
+    Devices report the caller in slightly different forms across models:
+    - 6742W: exact match (e.g. ``00000100``), and floor calls append a
+      subaddress (``00000B060`` for apartment ``00000B06``) → prefix.
+    - 6741W: the caller drops a leading character vs the address book
+      (``B100001`` for entrance ``SB100001``) → suffix.
+
+    So treat equality, either-direction prefix, or either-direction suffix as a
+    match. Addresses are distinct enough that this doesn't cross-match entrance
+    vs floor in practice.
+    """
+    if not caller or not addr:
+        return False
+    c, a = caller.upper(), addr.upper()
+    return (
+        c == a
+        or c.startswith(a)
+        or a.startswith(c)
+        or c.endswith(a)
+        or a.endswith(c)
+    )
+
+
 class ComelitEventsManager:
     """Owns the local listener + FCM manager and picks the active source."""
 
@@ -171,9 +196,9 @@ class ComelitEventsManager:
         vip = self.coordinator.vip_config or {}
         books = vip.get("user-parameters", {})
         for entry in books.get("entrance-address-book", []):
-            if entry.get("apt-address") == caller:
+            if address_matches(caller, entry.get("apt-address")):
                 return entry.get("name")
         apt = vip.get("apt-address", "")
-        if apt and caller.startswith(apt):
+        if address_matches(caller, apt):
             return "Floor call"
         return caller

@@ -21,6 +21,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import ComelitDataUpdateCoordinator
 from .entity import ComelitEntity
+from .events import address_matches
 from .fcm_push import signal_doorbell
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ class ComelitEntranceCamera(ComelitEntity, Camera):
     def _handle_ring(self, payload: dict[str, Any]) -> None:
         caller = payload.get("caller") or ""
         # Refresh on this entrance's ring, or on any cloud ring (no caller).
-        if payload.get("source") == "cloud" or caller == self._entrance:
+        if payload.get("source") == "cloud" or address_matches(caller, self._entrance):
             self.hass.async_create_task(self._refresh(force=True))
 
     async def stream_source(self) -> str | None:
