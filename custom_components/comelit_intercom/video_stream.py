@@ -74,18 +74,72 @@ class ComelitStreamManager:
     async def async_get_image(
         self, entrance: str, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        """Return a fresh JPEG still, decoded in-process from the live call."""
-        # Ensure a call to this entrance is running.
-        if await self.async_stream_source(entrance) is None:
-            return None
-        session = self._session
-        if session is None or session.rtp_receiver is None:
-            return None
-        try:
-            return await session.rtp_receiver.get_jpeg_frame(timeout=_MEDIA_WARMUP + 5)
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("Snapshot from stream failed: %s", err)
-            return None
+        """Return a fresh JPEG still.
+
+        If a live-view stream is already running we grab a frame from it
+        (the device serves only one call at a time). Otherwise we place a
+        clean, self-contained one-shot call — the reliable pattern for
+        on-ring snapshots, unaffected by the device's ~30s call lease that
+        eventually freezes a long-held stream.
+        """
+        if self._session is not None and self._session.active:
+            rx = self._session.rtp_receiver
+            if rx is not None:
+                try:
+                    return await rx.get_jpeg_frame(timeout=_MEDIA_WARMUP + 5)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning("Snapshot from live stream failed: %s", err)
+                    return None
+        return await self._oneshot_image(entrance)
+
+    async def _oneshot_image(self, entrance: str) -> bytes | None:
+        """Place a short fresh video call, decode one frame, tear down."""
+        async with self._lock:
+            client = IconaBridgeClient(self._host, self._port)
+            server = LocalRtspServer()
+            session: VideoCallSession | None = None
+            try:
+                await server.start()
+                await client.connect()
+                ua = await client.open_channel("UAUT", ChannelType.UAUT)
+                resp = await client.send_json(
+                    ua,
+                    {
+                        "message": "access",
+                        "user-token": self._token,
+                        "message-type": "request",
+                        "message-id": 2,
+                    },
+                )
+                if resp.get("response-code") != 200:
+                    _LOGGER.warning(
+                        "Snapshot auth failed (code %s)", resp.get("response-code")
+                    )
+                    return None
+                vip = self._vip() or {}
+                config = DeviceConfig(
+                    apt_address=vip.get("apt-address", ""),
+                    apt_subaddress=vip.get("apt-subaddress", 0),
+                    caller_address=entrance,
+                )
+                session = VideoCallSession(
+                    client, config, auto_timeout=False, rtsp_server=server
+                )
+                await session.start()
+                return await session.rtp_receiver.get_jpeg_frame(
+                    timeout=_MEDIA_WARMUP + 6
+                )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("One-shot snapshot failed: %s", err)
+                return None
+            finally:
+                if session is not None:
+                    with contextlib.suppress(Exception):
+                        await session.stop()
+                with contextlib.suppress(Exception):
+                    await client.disconnect()
+                with contextlib.suppress(Exception):
+                    await server.stop()
 
     # --- lifecycle -------------------------------------------------------
 
