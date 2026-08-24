@@ -55,15 +55,19 @@ class ComelitPushManager:
         hass: HomeAssistant,
         entry: ConfigEntry,
         vip_config_provider,
+        on_ring=None,
     ) -> None:
         """Initialize.
 
         vip_config_provider: a zero-arg callable returning the current vip
         config dict (from the coordinator), so we can read apt-address lazily.
+        on_ring: optional callback(payload) — when set, ring pushes are handed
+        to it (the events manager) instead of being dispatched directly here.
         """
         self.hass = hass
         self.entry = entry
         self._vip_config_provider = vip_config_provider
+        self._on_ring = on_ring
         self._store: Store = Store(
             hass, STORAGE_VERSION, f"{STORAGE_KEY_FCM}_{entry.entry_id}"
         )
@@ -234,9 +238,14 @@ class ComelitPushManager:
                     payload["notification"] = {"body": note}
 
             _LOGGER.info("Doorbell ring received (call_id=%s)", payload.get("call_id"))
-            self.hass.bus.async_fire(EVENT_DOORBELL, payload)
-            async_dispatcher_send(
-                self.hass, signal_doorbell(self.entry.entry_id), payload
-            )
+            payload["source"] = "cloud"
+            payload.setdefault("event_type", "ring")
+            if self._on_ring is not None:
+                self._on_ring(payload)
+            else:
+                self.hass.bus.async_fire(EVENT_DOORBELL, payload)
+                async_dispatcher_send(
+                    self.hass, signal_doorbell(self.entry.entry_id), payload
+                )
         except Exception as err:  # noqa: BLE001
             _LOGGER.exception("Error handling FCM notification: %s", err)

@@ -13,9 +13,11 @@ from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TOKEN
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 
 from .comelit_client import IconaBridgeClient
 from .const import (
+    CONF_ACTIVATION_CODE,
     CONF_ENABLE_NOTIFICATIONS,
     CONF_PUSH_TOKEN,
     DEFAULT_PORT,
@@ -29,6 +31,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_HOST): str,
         vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
+        vol.Optional(CONF_ACTIVATION_CODE): str,
         vol.Optional(CONF_TOKEN): str,
     }
 )
@@ -46,28 +49,26 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     """Validate the user input allows us to connect."""
     _LOGGER.info("Starting validation for Comelit device at %s", data[CONF_HOST])
 
-    # If no token provided, try to extract it automatically
+    data = dict(data)
+    activation_code = data.get(CONF_ACTIVATION_CODE)
     token = data.get(CONF_TOKEN)
-    if not token:
-        _LOGGER.info("No token provided, attempting automatic extraction")
 
+    # If neither an activation code nor a token was given, try to extract a
+    # token automatically from a device backup (uses the default password).
+    if not activation_code and not token:
+        _LOGGER.info("No token/activation code provided, attempting automatic extraction")
         try:
             token = await asyncio.wait_for(extract_token(data[CONF_HOST]), timeout=30.0)
         except TimeoutError:
             _LOGGER.error("Token extraction timed out after 30 seconds")
             token = None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             _LOGGER.error(f"Token extraction failed with error: {e}")
             token = None
-
         if not token:
             raise InvalidAuth(
-                "Failed to extract token automatically. Please check that the device is accessible and using the default 'comelit' password, or enter your token manually."
+                "Failed to extract token automatically. Please check that the device is accessible and using the default 'comelit' password, provide an activation code, or enter your token manually."
             )
-
-        _LOGGER.info("Successfully extracted token automatically")
-        # Update data with extracted token
-        data = dict(data)
         data[CONF_TOKEN] = token
 
     client = IconaBridgeClient(data[CONF_HOST], data.get(CONF_PORT, DEFAULT_PORT))
@@ -98,9 +99,24 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         raise CannotConnect from err
 
     try:
+        # Mint a dedicated user token from the activation code, if provided.
+        if activation_code and not token:
+            _LOGGER.info("Activating with cloud activation code")
+            token = await asyncio.wait_for(
+                client.activate_with_code(activation_code, "Home Assistant"),
+                timeout=20.0,
+            )
+            if not token:
+                raise InvalidAuth(
+                    "Activation failed — check the activation code (create a user "
+                    "and generate a code in the device web UI at :8080/users.html)"
+                )
+            data[CONF_TOKEN] = token
+            data.pop(CONF_ACTIVATION_CODE, None)
+
         _LOGGER.info("Authenticating with device")
         auth_code = await asyncio.wait_for(
-            client.authenticate(data[CONF_TOKEN]), timeout=15.0
+            client.authenticate(token), timeout=15.0
         )
 
         if auth_code != 200:
@@ -146,12 +162,42 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    def __init__(self) -> None:
+        """Initialize the flow."""
+        self._discovered_host: str | None = None
+
     @staticmethod
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
     ) -> OptionsFlowHandler:
         """Return the options flow."""
         return OptionsFlowHandler()
+
+    def _user_schema(self) -> vol.Schema:
+        """User form schema, pre-filling a DHCP-discovered host if any."""
+        if not self._discovered_host:
+            return STEP_USER_DATA_SCHEMA
+        return vol.Schema(
+            {
+                vol.Required(CONF_HOST, default=self._discovered_host): str,
+                vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
+                vol.Optional(CONF_ACTIVATION_CODE): str,
+                vol.Optional(CONF_TOKEN): str,
+            }
+        )
+
+    async def async_step_dhcp(
+        self, discovery_info: DhcpServiceInfo
+    ) -> FlowResult:
+        """Handle a Comelit device discovered via DHCP (OUI 00:25:29)."""
+        host = discovery_info.ip
+        await self.async_set_unique_id(host)
+        self._abort_if_unique_id_configured(updates={CONF_HOST: host})
+        self._discovered_host = host
+        # Show the normal form, pre-filled with the discovered IP, so the user
+        # can supply an activation code / token.
+        self.context["title_placeholders"] = {"name": f"Comelit ({host})"}
+        return await self.async_step_user()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -160,7 +206,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is None:
             return self.async_show_form(
                 step_id="user",
-                data_schema=STEP_USER_DATA_SCHEMA,
+                data_schema=self._user_schema(),
                 description_placeholders={
                     "token_help": "Leave token empty to try automatic extraction"
                 },
@@ -171,10 +217,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         try:
             info = await validate_input(self.hass, user_input)
-            # Get the potentially updated data (with extracted token)
+            # Get the potentially updated data (with extracted/minted token)
             validated_data = user_input.copy()
-            if not user_input.get(CONF_TOKEN) and info.get("token"):
+            if info.get("token"):
                 validated_data[CONF_TOKEN] = info["token"]
+            # The activation code is single-use — don't persist it.
+            validated_data.pop(CONF_ACTIVATION_CODE, None)
         except CannotConnect:
             errors["base"] = "cannot_connect"
         except InvalidAuth as e:

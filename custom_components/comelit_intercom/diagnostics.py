@@ -19,7 +19,8 @@ async def async_get_config_entry_diagnostics(
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
     coordinator: ComelitDataUpdateCoordinator = entry.runtime_data
-    pm = coordinator.push_manager
+    mgr = coordinator.events_manager
+    local = getattr(mgr, "_local", None) if mgr else None
 
     return {
         "entry": {
@@ -33,9 +34,12 @@ async def async_get_config_entry_diagnostics(
             "actuators": len((coordinator.data or {}).get("actuators", [])),
         },
         "last_update_success": coordinator.last_update_success,
-        "push": {
-            "enabled": pm is not None,
-            "running": bool(pm and getattr(pm, "_started", False)),
-            "token_registered": bool(pm and getattr(pm, "_fcm_token", None)),
+        "events": {
+            "enabled": mgr is not None,
+            "source": mgr.source if mgr else "none",
+            "local_state": getattr(local, "state", None) if local else None,
+            "local_failures": getattr(local, "consecutive_failures", None)
+            if local
+            else None,
         },
     }

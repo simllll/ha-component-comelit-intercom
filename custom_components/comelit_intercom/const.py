@@ -6,6 +6,8 @@ DOMAIN = "comelit_intercom"
 CONF_HOST = "host"
 CONF_PORT = "port"
 CONF_TOKEN = "token"
+# Cloud activation code (from the device web UI) → mints a dedicated token.
+CONF_ACTIVATION_CODE = "activation_code"
 
 # Default values
 DEFAULT_NAME = "Comelit Intercom"

@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a problem with the Comelit ICONA integration
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to report a bug!
+  - type: input
+    id: device
+    attributes:
+      label: Intercom model
+      description: e.g. 6742W (server-info reports a code like "MnWi")
+      placeholder: "6742W / MnWi, firmware 2.3.1"
+    validations:
+      required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+    validations:
+      required: true
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration version
+    validations:
+      required: true
+  - type: dropdown
+    id: events_source
+    attributes:
+      label: Events source (from the "Events source" sensor)
+      options:
+        - local
+        - cloud
+        - none
+        - not applicable
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / diagnostics
+      description: Enable debug logging for custom_components.comelit_intercom and attach the download-diagnostics output (tokens are redacted).
+      render: text

@@ -17,7 +17,10 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
+from homeassistant.helpers.entity import EntityCategory
+
 from .coordinator import ComelitDataUpdateCoordinator
+from .events import SOURCE_NONE, signal_source
 from .fcm_push import signal_doorbell
 
 
@@ -28,10 +31,14 @@ async def async_setup_entry(
 ) -> None:
     """Set up Comelit sensors."""
     coordinator: ComelitDataUpdateCoordinator = entry.runtime_data
-    if coordinator.push_manager is None:
+    if coordinator.events_manager is None:
         return
     async_add_entities(
-        [ComelitLastRingSensor(coordinator), ComelitRingCountSensor(coordinator)]
+        [
+            ComelitLastRingSensor(coordinator),
+            ComelitRingCountSensor(coordinator),
+            ComelitEventsSourceSensor(coordinator),
+        ]
     )
 
 
@@ -118,4 +125,39 @@ class ComelitRingCountSensor(RestoreSensor):
     def _handle_ring(self, _payload: dict[str, Any]) -> None:
         """Increment on each ring."""
         self._count += 1
+        self.async_write_ha_state()
+
+
+class ComelitEventsSourceSensor(SensorEntity):
+    """Active doorbell-events source: local, cloud, or none."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Events source"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["local", "cloud", "none"]
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:transit-connection-variant"
+
+    def __init__(self, coordinator: ComelitDataUpdateCoordinator) -> None:
+        """Initialize."""
+        self._coordinator = coordinator
+        self._attr_unique_id = f"{coordinator.entry.unique_id}_events_source"
+        self._attr_device_info = coordinator.device_info
+
+    @property
+    def native_value(self) -> str:
+        mgr = self._coordinator.events_manager
+        return mgr.source if mgr else SOURCE_NONE
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                signal_source(self._coordinator.entry.entry_id),
+                self._handle_source,
+            )
+        )
+
+    @callback
+    def _handle_source(self, _source: str) -> None:
         self.async_write_ha_state()
