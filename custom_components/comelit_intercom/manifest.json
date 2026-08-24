@@ -1,14 +1,27 @@
 {
   "domain": "comelit_intercom",
   "name": "Comelit ICONA Intercom",
-  "codeowners": ["@simllll", "@nicolas-fricke"],
+  "codeowners": [
+    "@simllll",
+    "@nicolas-fricke"
+  ],
   "config_flow": true,
-  "dependencies": ["ffmpeg"],
-  "dhcp": [{ "macaddress": "002529*" }],
+  "dependencies": [
+    "ffmpeg"
+  ],
+  "dhcp": [
+    {
+      "macaddress": "002529*"
+    }
+  ],
   "documentation": "https://github.com/simllll/hass-comelit-icona",
   "integration_type": "device",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/simllll/hass-comelit-icona/issues",
-  "requirements": ["aiohttp>=3.8.0", "firebase-messaging>=0.4.0", "av>=12.0.0"],
-  "version": "1.3.0"
+  "requirements": [
+    "aiohttp>=3.8.0",
+    "firebase-messaging>=0.4.0",
+    "av>=12.0.0"
+  ],
+  "version": "1.3.1"
 }
