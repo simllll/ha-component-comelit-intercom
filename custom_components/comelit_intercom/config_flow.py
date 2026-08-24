@@ -17,9 +17,9 @@ from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 
 from .comelit_client import IconaBridgeClient
 from .const import (
-    CONF_ACTIVATION_CODE,
     CONF_ENABLE_NOTIFICATIONS,
     CONF_PUSH_TOKEN,
+    CONF_USER_MATCH,
     DEFAULT_PORT,
     DOMAIN,
 )
@@ -31,7 +31,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_HOST): str,
         vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
-        vol.Optional(CONF_ACTIVATION_CODE): str,
+        vol.Optional(CONF_USER_MATCH): str,
         vol.Optional(CONF_TOKEN): str,
     }
 )
@@ -50,15 +50,20 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     _LOGGER.info("Starting validation for Comelit device at %s", data[CONF_HOST])
 
     data = dict(data)
-    activation_code = data.get(CONF_ACTIVATION_CODE)
+    user_match = data.get(CONF_USER_MATCH)
     token = data.get(CONF_TOKEN)
 
-    # If neither an activation code nor a token was given, try to extract a
-    # token automatically from a device backup (uses the default password).
-    if not activation_code and not token:
-        _LOGGER.info("No token/activation code provided, attempting automatic extraction")
+    # No explicit token: extract one from a device backup (default password).
+    # If a dedicated user name/email is given, extract *that* user's token
+    # (pair it once via the Comelit app first) — this gives HA its own identity,
+    # required for cloud-free local doorbell events. Otherwise fall back to the
+    # first (monitor) token.
+    if not token:
+        _LOGGER.info("No token provided, extracting from backup (match=%s)", user_match)
         try:
-            token = await asyncio.wait_for(extract_token(data[CONF_HOST]), timeout=30.0)
+            token = await asyncio.wait_for(
+                extract_token(data[CONF_HOST], match=user_match), timeout=30.0
+            )
         except TimeoutError:
             _LOGGER.error("Token extraction timed out after 30 seconds")
             token = None
@@ -66,10 +71,17 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
             _LOGGER.error(f"Token extraction failed with error: {e}")
             token = None
         if not token:
+            if user_match:
+                raise InvalidAuth(
+                    f"No user matching '{user_match}' found. Create that user in the "
+                    "device web UI (port 8080) and pair it in the Comelit app first."
+                )
             raise InvalidAuth(
-                "Failed to extract token automatically. Please check that the device is accessible and using the default 'comelit' password, provide an activation code, or enter your token manually."
+                "Failed to extract token automatically. Check the device is reachable "
+                "and uses the default 'comelit' password, or enter a token manually."
             )
         data[CONF_TOKEN] = token
+        data.pop(CONF_USER_MATCH, None)
 
     client = IconaBridgeClient(data[CONF_HOST], data.get(CONF_PORT, DEFAULT_PORT))
 
@@ -99,21 +111,6 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         raise CannotConnect from err
 
     try:
-        # Mint a dedicated user token from the activation code, if provided.
-        if activation_code and not token:
-            _LOGGER.info("Activating with cloud activation code")
-            token = await asyncio.wait_for(
-                client.activate_with_code(activation_code, "Home Assistant"),
-                timeout=20.0,
-            )
-            if not token:
-                raise InvalidAuth(
-                    "Activation failed — check the activation code (create a user "
-                    "and generate a code in the device web UI at :8080/users.html)"
-                )
-            data[CONF_TOKEN] = token
-            data.pop(CONF_ACTIVATION_CODE, None)
-
         _LOGGER.info("Authenticating with device")
         auth_code = await asyncio.wait_for(
             client.authenticate(token), timeout=15.0
@@ -181,7 +178,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             {
                 vol.Required(CONF_HOST, default=self._discovered_host): str,
                 vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
-                vol.Optional(CONF_ACTIVATION_CODE): str,
+                vol.Optional(CONF_USER_MATCH): str,
                 vol.Optional(CONF_TOKEN): str,
             }
         )
@@ -195,7 +192,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured(updates={CONF_HOST: host})
         self._discovered_host = host
         # Show the normal form, pre-filled with the discovered IP, so the user
-        # can supply an activation code / token.
+        # can supply a dedicated-user name/email or a token.
         self.context["title_placeholders"] = {"name": f"Comelit ({host})"}
         return await self.async_step_user()
 
@@ -221,8 +218,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             validated_data = user_input.copy()
             if info.get("token"):
                 validated_data[CONF_TOKEN] = info["token"]
-            # The activation code is single-use — don't persist it.
-            validated_data.pop(CONF_ACTIVATION_CODE, None)
+            # Don't persist the transient user-match hint.
+            validated_data.pop(CONF_USER_MATCH, None)
         except CannotConnect:
             errors["base"] = "cannot_connect"
         except InvalidAuth as e:

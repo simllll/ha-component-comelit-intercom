@@ -6,8 +6,9 @@ DOMAIN = "comelit_intercom"
 CONF_HOST = "host"
 CONF_PORT = "port"
 CONF_TOKEN = "token"
-# Cloud activation code (from the device web UI) → mints a dedicated token.
-CONF_ACTIVATION_CODE = "activation_code"
+# Name/email of a dedicated user (paired via the Comelit app) whose token to
+# extract from a device backup — so Home Assistant uses its own identity.
+CONF_USER_MATCH = "dedicated_user"
 
 # Default values
 DEFAULT_NAME = "Comelit Intercom"

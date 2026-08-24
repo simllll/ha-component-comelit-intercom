@@ -20,7 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def extract_token(
-    host: str, password: str = "comelit", port: int = 8080
+    host: str, password: str = "comelit", port: int = 8080, match: str | None = None
 ) -> str | None:
     """
     Extract authentication token from Comelit device.
@@ -117,7 +117,7 @@ async def extract_token(
                 _LOGGER.info(f"Downloaded {len(backup_data)} bytes")
 
             # Step 6: Extract token from backup
-            return await extract_token_from_backup(backup_data)
+            return await extract_token_from_backup(backup_data, match=match)
 
         except Exception as e:
             _LOGGER.error(f"Error in token extraction: {e}")
@@ -127,10 +127,34 @@ async def extract_token(
             return None
 
 
-async def extract_token_from_backup(backup_data: bytes) -> str | None:
-    """Extract token from backup archive."""
+async def extract_token_from_backup(
+    backup_data: bytes, match: str | None = None
+) -> str | None:
+    """Extract a user token from a backup archive.
+
+    If ``match`` is given, return the token of the user whose name or email
+    contains it (case-insensitive) — used to pick a dedicated Home Assistant
+    identity paired via the app. Otherwise return the first non-null token.
+    """
     try:
         loop = asyncio.get_running_loop()
+
+        def _match_user(content: str) -> str | None:
+            # Each user is a line: mspUsersMap.0.N = ... 6:4:"NAME" ... 9:4:"TOKEN" ... 11:4:"EMAIL" ...
+            needle = match.lower()
+            for line in content.splitlines():
+                if "mspUsersMap" not in line:
+                    continue
+                name = re.search(r'\b6:4:"([^"]*)"', line)
+                token = re.search(r'\b9:4:"([a-f0-9]{32})"', line, re.IGNORECASE)
+                email = re.search(r'\b11:4:"([^"]*)"', line)
+                if not token or token.group(1) == "0" * 32:
+                    continue
+                hay = f"{name.group(1) if name else ''} {email.group(1) if email else ''}".lower()
+                if needle in hay:
+                    _LOGGER.info("Matched user %r -> token %s...", match, token.group(1)[:8])
+                    return token.group(1)
+            return None
 
         def _extract():
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -167,6 +191,16 @@ async def extract_token_from_backup(backup_data: bytes) -> str | None:
 
                             _LOGGER.debug(f"users.cfg size: {len(content)} bytes")
 
+                            # If a specific user was requested, match by name/email.
+                            if match:
+                                tok = _match_user(content)
+                                if tok:
+                                    return tok
+                                _LOGGER.warning(
+                                    "No user matching %r found in backup", match
+                                )
+                                return None
+
                             # The users.cfg file uses a serialized format where:
                             # - Fields are numbered (1:, 2:, etc.)
                             # - Field 9 contains the authentication token
@@ -193,9 +227,9 @@ async def extract_token_from_backup(backup_data: bytes) -> str | None:
                                 _LOGGER.info(
                                     f"Found {len(hex_matches)} potential tokens via hex pattern"
                                 )
-                                for match in hex_matches:
-                                    if match != "00000000000000000000000000000000":
-                                        return match
+                                for candidate in hex_matches:
+                                    if candidate != "00000000000000000000000000000000":
+                                        return candidate
 
                 _LOGGER.error("No token found in backup")
                 return None

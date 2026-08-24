@@ -14,7 +14,7 @@ for ring notifications).
 > (thank you! 🙏) and also draws on
 > [antoiba86/hass-comelit-intercom-local](https://github.com/antoiba86/hass-comelit-intercom-local)
 > for the video stack. It is a **major rewrite** with local doorbell events,
-> cloud fallback, a camera, auto-activation, DHCP discovery and more.
+> cloud fallback, a camera, a dedicated-identity setup, DHCP discovery and more.
 
 ## Features
 
@@ -29,8 +29,8 @@ for ring notifications).
     `local` / `cloud` / `none`.
 - 🎥 **Entrance camera** — on-demand snapshot (and a fresh snapshot on ring),
   decoded locally from the intercom's own H.264 video.
-- 🔑 **Auto-activation** — mint a dedicated Home Assistant identity from an
-  activation code during setup (no clashing with your phone or the wall monitor).
+- 🔑 **Dedicated identity** — use a Home Assistant user paired via the app so it
+  doesn't clash with your phone or the wall monitor (needed for local events).
 - 📈 **Sensors** — connectivity, ringing, last ring, ring count, events source.
 - 🔎 **DHCP discovery**, device model/firmware/serial, and downloadable
   diagnostics (secrets redacted).
@@ -62,18 +62,24 @@ Home Assistant will **auto-discover** the intercom when it joins your network
 (via its Comelit MAC prefix). You can also add it manually:
 Settings → Devices & Services → **Add Integration** → *Comelit ICONA Intercom*.
 
-You'll be asked for the IP and **one** credential:
+You'll be asked for the IP and, optionally, how to authenticate:
 
-- **Activation code (recommended).** In the device web UI
-  (`http://<ip>:8080/users.html`) add a user (e.g. "Home Assistant") and
-  *generate an activation code*. Paste it here — the integration mints its own
-  **dedicated token**. This is required for cloud-free **local** doorbell events
-  (the wall-monitor token conflicts; a phone's token would stop the phone's
-  notifications).
+- **Dedicated user (recommended for local events).** In the device web UI
+  (`http://<ip>:8080`, users page) add a user for Home Assistant (e.g. name it
+  "Home Assistant"), generate its activation code, and **pair it once in the
+  Comelit app** (this completes activation via Comelit's cloud and mints the
+  token on the device). Then enter that user's **name or email** here — Home
+  Assistant reads *that* user's token from a device backup, so it has its own
+  identity. Required for cloud-free **local** doorbell events (the wall-monitor
+  token conflicts; a phone's token would stop the phone's notifications).
 - **Token** (advanced) — paste an existing 32-char user token.
-- **Leave both empty** — the integration auto-extracts the wall-monitor token
-  from a device backup (default `comelit` password). Control works, but local
-  events fall back to cloud.
+- **Leave both empty** — auto-extracts the wall-monitor token from a device
+  backup (default `comelit` password). Control works, but doorbell events fall
+  back to cloud (FCM).
+
+> **Why the app step?** Token *minting* happens through Comelit's cloud during
+> app activation — it can't be done purely locally. Once paired, everything the
+> integration does (control, local events, camera) is local.
 
 ## Entities
 
@@ -111,7 +117,7 @@ Integration → **Configure**:
 
 ## Limitations
 
-- **Local events need a dedicated identity** (activation code); otherwise events
+- **Local events need a dedicated identity** (a user paired via the app); otherwise events
   use cloud fallback (needs internet on the intercom and HA).
 - **No door/gate open-state** — the openers are momentary relay pulses with no
   state feedback, hence `lock` entities that "open".
