@@ -51,7 +51,14 @@ After you've installed the component on your system, it's time to set it up:
 1. Go to Settings → Devices & Services
 2. Click "Add Integration" and search for "Comelit Intercom"
 3. Enter your device's IP address
-4. Leave the token field empty for automatic extraction, or provide your token if you know it
+4. **Recommended:** create a dedicated user in the device web UI
+   (`http://<ip>:8080/users.html` → add user → *generate activation code*) and
+   paste the **activation code** — the integration mints its own dedicated
+   token, enabling cloud-free local doorbell events without clashing with your
+   phone or the wall monitor.
+   Alternatively leave everything empty to auto-extract the token (default
+   `comelit` password), or paste an existing token — but note the auto-extracted
+   monitor token can't hold local events (it'll use cloud fallback).
 
 ### Automatic Token Extraction
 
@@ -87,6 +94,7 @@ doors/gates, and create the entities below.
 | Ringing | `binary_sensor` (sound) | On during a ring, auto-clears after 30 s |
 | Last ring | `sensor` (timestamp) | Time of the most recent ring |
 | Ring count | `sensor` (total increasing) | Number of rings (persists across restarts) |
+| Events source | `sensor` (enum: local/cloud/none) | Which delivery path is active |
 
 > Openers appear as **both** a `button` and a `lock`. Use whichever fits your
 > dashboard/automations and disable the other if you like.
@@ -98,20 +106,29 @@ You can then:
 - Use with voice assistants and include in scripts/scenes
 - Trigger door opening from presence detection, NFC tags, etc.
 
-### Doorbell ring notifications (cloud push)
+### Doorbell ring notifications (local, with cloud fallback)
 
-On current Comelit firmware, ring events are **not** delivered over the local
-network — the intercom notifies apps through Comelit's cloud via Firebase Cloud
-Messaging (FCM). This integration registers a push token with the Comelit app's
-Firebase project, enrolls it with your intercom, and turns incoming ring pushes
-into Home Assistant events.
+Doorbell rings are delivered two ways, and the integration picks the best
+available automatically (see the **Events source** sensor):
 
-- **Requires internet** on both the intercom and Home Assistant.
-- Enabled by default. Toggle it in the integration's **Configure** (options) dialog.
-- **Push identity (advanced):** by default the push token is enrolled under the
-  same identity as your control token. If that clashes with a paired phone
-  (the phone stops getting notifications), set a *different* ICONA token in the
-  **Push identity token** option so the phone keeps its own registration.
+- **Local (primary):** the integration holds a registration on the intercom
+  and receives incoming calls directly over the LAN — **no internet required**,
+  instant, and it even tells you **which** doorbell rang (entrance vs floor) via
+  the caller address on the doorbell event. This needs a **dedicated identity**
+  (see *Recommended setup* above — use an activation code).
+- **Cloud (fallback):** if the local registration can't be held (e.g. you
+  configured the monitor token, which conflicts), it falls back to Comelit's
+  cloud push (FCM). This requires internet on both the intercom and HA.
+
+The doorbell `event` entity fires with attributes `source` (`local`/`cloud`),
+`doorbell` (name), and `caller`. A `comelit_intercom_doorbell` bus event is
+also fired for automations.
+
+**Why a dedicated identity?** The wall-monitor token conflicts (the device
+kicks a duplicate), and reusing your phone's token stops the phone getting
+notifications. An activation-code-minted identity avoids both. Create one at
+`http://<ip>:8080/users.html` (add user → generate activation code) and enter
+the code during setup.
 
 ### Options
 
@@ -121,8 +138,9 @@ Open the integration → **Configure**:
 
 ## Known limitations
 
-- **Ring events require internet** (Comelit cloud → FCM); there is no local ring
-  delivery on current firmware (a held local socket receives nothing, verified).
+- **Local ring events need a dedicated identity** (activation code). With the
+  monitor token they can't be held, so events fall back to cloud (FCM), which
+  needs internet on the intercom and HA.
 - **No door/gate open-state** — the gates are momentary relay pulses and the
   device reports no persistent open/closed state, so opener entities are
   `button`s, not locks/covers.
