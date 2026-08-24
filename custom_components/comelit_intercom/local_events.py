@@ -289,7 +289,7 @@ class ComelitLocalEventListener:
         # Open CTPP with our full address; capture the server channel id.
         self._req += 1
         await self._send(_channel_open("CTPP", _CH_CTPP, self._req, self._our_addr))
-        creq, cbody = await self._read_frame(10)
+        _creq, cbody = await self._read_frame(10)
         # server channel id sits in the COMMAND response body (bytes 8-10)
         self._ctpp_id = struct.unpack("<H", cbody[8:10])[0] if len(cbody) >= 10 else self._req
 

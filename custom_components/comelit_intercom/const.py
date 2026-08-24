@@ -14,7 +14,6 @@ CONF_USER_MATCH = "dedicated_user"
 CONF_WEB_PASSWORD = "web_password"
 
 # Default values
-DEFAULT_NAME = "Comelit Intercom"
 DEFAULT_PORT = 64100
 # Web-UI (config/backup) port and its factory-default admin password.
 DEFAULT_WEB_PORT = 8080
@@ -51,6 +50,3 @@ STORAGE_KEY_FCM = "comelit_intercom_fcm"
 
 # HA event fired on the bus when the doorbell rings.
 EVENT_DOORBELL = "comelit_intercom_doorbell"
-
-# Event-entity event types.
-EVENT_TYPE_RING = "ring"
