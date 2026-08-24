@@ -13,6 +13,7 @@ from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TOKEN
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 
 from .comelit_client import IconaBridgeClient
 from .const import (
@@ -161,12 +162,42 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    def __init__(self) -> None:
+        """Initialize the flow."""
+        self._discovered_host: str | None = None
+
     @staticmethod
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
     ) -> OptionsFlowHandler:
         """Return the options flow."""
         return OptionsFlowHandler()
+
+    def _user_schema(self) -> vol.Schema:
+        """User form schema, pre-filling a DHCP-discovered host if any."""
+        if not self._discovered_host:
+            return STEP_USER_DATA_SCHEMA
+        return vol.Schema(
+            {
+                vol.Required(CONF_HOST, default=self._discovered_host): str,
+                vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
+                vol.Optional(CONF_ACTIVATION_CODE): str,
+                vol.Optional(CONF_TOKEN): str,
+            }
+        )
+
+    async def async_step_dhcp(
+        self, discovery_info: DhcpServiceInfo
+    ) -> FlowResult:
+        """Handle a Comelit device discovered via DHCP (OUI 00:25:29)."""
+        host = discovery_info.ip
+        await self.async_set_unique_id(host)
+        self._abort_if_unique_id_configured(updates={CONF_HOST: host})
+        self._discovered_host = host
+        # Show the normal form, pre-filled with the discovered IP, so the user
+        # can supply an activation code / token.
+        self.context["title_placeholders"] = {"name": f"Comelit ({host})"}
+        return await self.async_step_user()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -175,7 +206,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is None:
             return self.async_show_form(
                 step_id="user",
-                data_schema=STEP_USER_DATA_SCHEMA,
+                data_schema=self._user_schema(),
                 description_placeholders={
                     "token_help": "Leave token empty to try automatic extraction"
                 },

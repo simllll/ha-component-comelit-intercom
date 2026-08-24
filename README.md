@@ -1,292 +1,129 @@
-# Comelit Intercom for Home Assistant
+# Comelit ICONA Intercom for Home Assistant
 
-This is a native Home Assistant integration for Comelit intercom systems (using the ICONA Bridge protocol). It allows you to control your Comelit doors directly from Home Assistant without requiring MQTT or Docker containers.
+A fully-featured, **local-first** Home Assistant integration for Comelit ViP
+intercoms that speak the **ICONA Bridge** protocol (TCP port 64100). Open your
+doors and gates, get real-time doorbell events, and pull the entrance camera —
+no MQTT, no Docker, and no cloud for control (cloud is only an optional fallback
+for ring notifications).
+
+[![Validate](https://github.com/simllll/hass-comelit-icona/actions/workflows/validate.yml/badge.svg)](https://github.com/simllll/hass-comelit-icona/actions/workflows/validate.yml)
+[![hacs](https://img.shields.io/badge/HACS-custom-41BDF5.svg)](https://hacs.xyz)
+
+> **Attribution.** This project began as a fork of
+> [nicolas-fricke/ha-component-comelit-intercom](https://github.com/nicolas-fricke/ha-component-comelit-intercom)
+> (thank you! 🙏) and also draws on
+> [antoiba86/hass-comelit-intercom-local](https://github.com/antoiba86/hass-comelit-intercom-local)
+> for the video stack. It is a **major rewrite** with local doorbell events,
+> cloud fallback, a camera, auto-activation, DHCP discovery and more.
 
 ## Features
 
-- Direct TCP communication with Comelit intercom devices (no MQTT bridge needed)
-- **Automatic token extraction** - no manual token retrieval required (if using default password)
-- Automatic discovery of all available **doors and gates/actuators**
-- **Button** entities for each door and each ViP actuator (gate/barrier)
-- 🔔 **Real-time doorbell/ring events** via Comelit cloud push (FCM) — an
-  `event` entity (device class *doorbell*) plus a `comelit_intercom_doorbell`
-  bus event for automations
-- **Sensors**: connectivity, ring-notification status, "ringing" (with
-  auto-off), and last-ring timestamp
-- **Device diagnostics** (model / firmware / serial) and downloadable
-  config-entry diagnostics
-- **Options flow** to toggle ring notifications and choose the push identity
-- Simple configuration through Home Assistant UI
-- Works with Comelit intercom models that support the ICONA Bridge protocol
+- 🔓 **Doors & gates** as `lock` entities (open) — every door and ViP actuator.
+- 🔔 **Real-time doorbell events** — a doorbell `event` per entrance panel plus a
+  **Floor call** ("Etagen") entity, with `ring` and `missed_call`.
+  - **Local-first**: the integration holds a registration on the intercom and
+    receives calls directly over the LAN — instant, no internet, and it knows
+    **which** doorbell rang.
+  - **Cloud fallback**: if a local registration can't be held, it automatically
+    falls back to Comelit's cloud push (FCM). An **Events source** sensor shows
+    `local` / `cloud` / `none`.
+- 🎥 **Entrance camera** — on-demand snapshot (and a fresh snapshot on ring),
+  decoded locally from the intercom's own H.264 video.
+- 🔑 **Auto-activation** — mint a dedicated Home Assistant identity from an
+  activation code during setup (no clashing with your phone or the wall monitor).
+- 📈 **Sensors** — connectivity, ringing, last ring, ring count, events source.
+- 🔎 **DHCP discovery**, device model/firmware/serial, and downloadable
+  diagnostics (secrets redacted).
 
-## Requirements
+## Supported devices
 
-- Home Assistant 2023.1 or newer
-- Comelit intercom with WiFi connectivity (e.g., Comelit 6741W, 6721W, 6742W)
-- Comelit device IP address
-- Device must be accessible on port 64100 (ICONA Bridge) and port 8080 (web interface for token extraction)
-- For **doorbell ring notifications**: the intercom **and** Home Assistant need
-  internet access (rings are delivered via Comelit's cloud → Firebase Cloud
-  Messaging, not over the local network). The `firebase-messaging` Python
-  package is installed automatically.
+Comelit ViP intercoms exposing the ICONA Bridge (port 64100). Developed and
+verified against a **6742W "Mini ViP handsfree Wifi"** (firmware 2.3.1); other
+ViP models that speak ICONA should work. See
+[`docs/PROTOCOL.md`](docs/PROTOCOL.md) for protocol details and firmware notes.
 
 ## Installation
 
-### HACS Installation (recommended)
+### HACS (recommended)
 
-1. Ensure you have [HACS](https://hacs.xyz/) installed and set up
-2. Add this repository's URL, `https://github.com/simllll/ha-component-comelit-intercom`, as custom repository and select "Integration" (see [docs](https://hacs.xyz/docs/faq/custom_repositories/))
-3. Seach for "Comelit Intercom" and click on "Download"
-4. After this is complete, restart Home Assistant
+1. Install [HACS](https://hacs.xyz/).
+2. HACS → ⋮ → **Custom repositories** → add
+   `https://github.com/simllll/hass-comelit-icona`, category **Integration**.
+3. Search for **Comelit ICONA Intercom**, download, and restart Home Assistant.
 
-### Manual Installation
+### Manual
 
-1. Copy the `custom_components/comelit_intercom` folder to your Home Assistant's `custom_components` directory
-2. Restart Home Assistant
+Copy `custom_components/comelit_intercom` into your HA `custom_components/`
+directory and restart.
 
-## Configuration
+## Setup
 
-After you've installed the component on your system, it's time to set it up:
+Home Assistant will **auto-discover** the intercom when it joins your network
+(via its Comelit MAC prefix). You can also add it manually:
+Settings → Devices & Services → **Add Integration** → *Comelit ICONA Intercom*.
 
-1. Go to Settings → Devices & Services
-2. Click "Add Integration" and search for "Comelit Intercom"
-3. Enter your device's IP address
-4. **Recommended:** create a dedicated user in the device web UI
-   (`http://<ip>:8080/users.html` → add user → *generate activation code*) and
-   paste the **activation code** — the integration mints its own dedicated
-   token, enabling cloud-free local doorbell events without clashing with your
-   phone or the wall monitor.
-   Alternatively leave everything empty to auto-extract the token (default
-   `comelit` password), or paste an existing token — but note the auto-extracted
-   monitor token can't hold local events (it'll use cloud fallback).
+You'll be asked for the IP and **one** credential:
 
-### Automatic Token Extraction
+- **Activation code (recommended).** In the device web UI
+  (`http://<ip>:8080/users.html`) add a user (e.g. "Home Assistant") and
+  *generate an activation code*. Paste it here — the integration mints its own
+  **dedicated token**. This is required for cloud-free **local** doorbell events
+  (the wall-monitor token conflicts; a phone's token would stop the phone's
+  notifications).
+- **Token** (advanced) — paste an existing 32-char user token.
+- **Leave both empty** — the integration auto-extracts the wall-monitor token
+  from a device backup (default `comelit` password). Control works, but local
+  events fall back to cloud.
 
-The integration can automatically extract your authentication token if your device uses the default 'comelit' password. Here's how it works:
-
-1. Logs into your device's web interface (port 8080) using the default password
-2. Creates a new configuration backup on the device
-3. Downloads the most recent backup file
-4. Extracts and parses the `users.cfg` file from the backup archive
-5. Finds your authentication token using the pattern `9:4:"<token>"`
-
-This process takes about 10-30 seconds and happens automatically during setup.
-
-### Manual Token Extraction
-
-If automatic extraction fails (e.g., you've changed the default password), you'll need to obtain the token manually. Follow the excellent guide by madchicken:
-https://github.com/madchicken/comelit-client/wiki/Get-your-user-token-for-ICONA-Bridge
-
-## Usage
-
-After configuration, the integration will connect, authenticate, discover your
-doors/gates, and create the entities below.
-
-### Entities
+## Entities
 
 | Entity | Type | Notes |
 |--------|------|-------|
-| Door / gate openers | `button` | One per door and per ViP actuator (gate/barrier) |
-| Door / gate locks | `lock` (supports *open*) | Same openers as locks — nicer for dashboards/voice ("open the door") |
-| Doorbell | `event` (device class *doorbell*) | Fires `ring` on an incoming call |
-| Connectivity | `binary_sensor` (connectivity) | Whether the ICONA bridge is reachable |
-| Ring notifications | `binary_sensor` (diagnostic) | Whether cloud push is registered/running |
-| Ringing | `binary_sensor` (sound) | On during a ring, auto-clears after 30 s |
-| Last ring | `sensor` (timestamp) | Time of the most recent ring |
-| Ring count | `sensor` (total increasing) | Number of rings (persists across restarts) |
-| Events source | `sensor` (enum: local/cloud/none) | Which delivery path is active |
-| Entrance camera | `camera` | On-demand door snapshot; auto-refreshes on that entrance's ring |
+| Door / gate | `lock` (open) | One per door and ViP actuator |
+| Doorbell (per entrance) | `event` (doorbell) | Fires `ring` / `missed_call` |
+| Floor call | `event` (doorbell) | The apartment's own station ("Etagen") |
+| Entrance camera | `camera` | On-demand snapshot; refreshes on that entrance's ring |
+| Connectivity | `binary_sensor` (connectivity) | ICONA bridge reachable |
+| Ringing | `binary_sensor` (sound) | On during a ring (auto-off 30 s) |
+| Last ring | `sensor` (timestamp) | Most recent ring |
+| Ring count | `sensor` (total increasing) | Persisted across restarts |
+| Events source | `sensor` (enum) | `local` / `cloud` / `none` |
 
-> Openers appear as **both** a `button` and a `lock`. Use whichever fits your
-> dashboard/automations and disable the other if you like.
+The doorbell `event` carries `source`, `doorbell`, and `caller` attributes; a
+`comelit_intercom_doorbell` bus event fires for every ring (catch-all for
+automations).
 
-You can then:
-- Add door/gate buttons to your dashboard
-- Automate on the doorbell: trigger on the `event` entity, or on the
-  `comelit_intercom_doorbell` bus event (payload includes `call_id`)
-- Use with voice assistants and include in scripts/scenes
-- Trigger door opening from presence detection, NFC tags, etc.
+## How doorbell events work
 
-### Doorbell ring notifications (local, with cloud fallback)
+On current firmware the wall monitor receives calls over the native ViP bus,
+while apps are notified via cloud push. This integration does what an app won't:
+it **holds** a local registration and receives incoming calls over it — so you
+get instant, cloud-free events and can tell entrance vs floor apart. If that
+registration can't be held (e.g. the monitor token is in use), it transparently
+falls back to cloud push. Toggle notifications and override the push identity in
+the integration's **Configure** dialog.
 
-Doorbell rings are delivered two ways, and the integration picks the best
-available automatically (see the **Events source** sensor):
+## Options
 
-- **Local (primary):** the integration holds a registration on the intercom
-  and receives incoming calls directly over the LAN — **no internet required**,
-  instant, and it even tells you **which** doorbell rang (entrance vs floor) via
-  the caller address on the doorbell event. This needs a **dedicated identity**
-  (see *Recommended setup* above — use an activation code).
-- **Cloud (fallback):** if the local registration can't be held (e.g. you
-  configured the monitor token, which conflicts), it falls back to Comelit's
-  cloud push (FCM). This requires internet on both the intercom and HA.
+Integration → **Configure**:
+- **Doorbell ring notifications** — enable/disable.
+- **Push identity token** — advanced: enroll cloud push under a different token.
 
-The doorbell `event` entity fires with attributes `source` (`local`/`cloud`),
-`doorbell` (name), and `caller`. A `comelit_intercom_doorbell` bus event is
-also fired for automations.
+## Limitations
 
-**Why a dedicated identity?** The wall-monitor token conflicts (the device
-kicks a duplicate), and reusing your phone's token stops the phone getting
-notifications. An activation-code-minted identity avoids both. Create one at
-`http://<ip>:8080/users.html` (add user → generate activation code) and enter
-the code during setup.
-
-### Options
-
-Open the integration → **Configure**:
-- **Doorbell ring notifications** — enable/disable cloud push.
-- **Push identity token** — optional; enroll push under a different identity.
-
-## Known limitations
-
-- **Local ring events need a dedicated identity** (activation code). With the
-  monitor token they can't be held, so events fall back to cloud (FCM), which
-  needs internet on the intercom and HA.
-- **No door/gate open-state** — the gates are momentary relay pulses and the
-  device reports no persistent open/closed state, so opener entities are
-  `button`s, not locks/covers.
-- **Video** is currently **snapshot-only**: the entrance `camera` pulls a still
-  image on demand (and on ring) by briefly negotiating the intercom's H.264
-  video locally. Live streaming (RTSP → go2rtc) is planned. Requires PyAV
-  (installed automatically). Note: each snapshot briefly places a video call to
-  the entrance panel.
-
-## How It Works
-
-### Protocol Overview
-
-The Comelit ICONA Bridge uses a custom binary/JSON hybrid protocol over TCP port 64100. This integration implements the protocol natively in Python.
-
-#### Message Structure
-
-All messages have an 8-byte header followed by a variable-length body:
-
-```
-Header (8 bytes):
-[0x00, 0x06]     - Magic bytes (constant)
-[XX, XX]         - Body length (uint16, little endian)
-[RR, RR]         - Request ID (uint16, little endian)
-[0x00, 0x00]     - Padding
-
-Body:
-- JSON messages: Start with '{' (0x7b)
-- Binary messages: Custom format based on message type
-```
-
-#### Channel-Based Communication
-
-The protocol uses channels for different operations:
-- **UAUT**: Authentication channel
-- **UCFG**: Configuration channel (get door list)
-- **CTPP**: Control channel (open doors)
-- **INFO**: Server information
-- **PUSH**: Push notifications
-
-Each operation follows this pattern:
-1. Open channel with COMMAND message (0xabcd)
-2. Perform operations on the channel
-3. Close channel with END message (0x01ef)
-
-#### Door Opening Sequence
-
-Opening a door involves:
-1. Open CTPP channel with the apartment address
-2. Send initialization message (0x18c0) with door parameters
-3. Send open door command (0x1800)
-4. Send open door confirmation (0x1820)
-
-The binary messages contain apartment addresses, output indices, and specific byte patterns that the device expects.
-
-### Architecture
-
-The integration consists of:
-- **comelit_client.py**: Python implementation of the ICONA Bridge protocol
-- **token_extractor.py**: Automatic token extraction from device backups
-- **config_flow.py**: UI configuration flow with automatic token extraction
-- **coordinator.py**: Data update coordinator for efficient polling
-- **button.py**: Button entities for door control
-- **test_service.py**: Developer service for testing connections
+- **Local events need a dedicated identity** (activation code); otherwise events
+  use cloud fallback (needs internet on the intercom and HA).
+- **No door/gate open-state** — the openers are momentary relay pulses with no
+  state feedback, hence `lock` entities that "open".
+- **Video is snapshot-only** for now; live streaming (RTSP → go2rtc) is planned.
+  Each snapshot briefly places a video call to the entrance panel.
 
 ## Credits
 
-This integration was made possible thanks to:
-
-- **[madchicken's comelit-client](https://github.com/madchicken/comelit-client)** - The original Node.js implementation that we reverse-engineered to understand the protocol, especially:
-  - The ICONA Bridge protocol documentation
-  - The binary message structure for door operations
-  - The channel management system
-  - Token extraction methodology
-
-- **Protocol Reverse Engineering** - The complex binary protocol for door operations was decoded by analyzing the comelit-client implementation, particularly:
-  - The specific byte patterns required for door commands (0x18c0, 0x1800, 0x1820)
-  - The message structure with apartment addresses and output indices
-  - The proper sequence of initialization and confirmation messages
-
-## Troubleshooting
-
-### Cannot Connect
-- Verify the IP address is correct
-- Ensure the device is on the same network as Home Assistant
-- Check that ports 64100 (ICONA Bridge) and 8080 (web interface) are accessible
-- Check Home Assistant logs for detailed error messages
-
-### Token Extraction Failed
-- Verify your device uses the default 'comelit' password
-- Try extracting the token manually (see link above)
-- Ensure port 8080 is accessible for the web interface
-- Check if your device creates encrypted backups (some firmware versions)
-
-### Invalid Authentication
-- Token may have changed (regenerate if needed)
-- Device might have been reset
-- Try the automatic extraction again
-
-### Doors Not Appearing
-- Check that doors are configured in your Comelit mobile app first
-- Verify the device config contains door entries
-- Try using the test service to debug: Developer Tools → Services → comelit_intercom.test_connection
-- Check logs for configuration data
-
-### Known Issues
-- Some Comelit devices may have encrypted backups, preventing automatic token extraction
-- Connection issues on macOS with Python 3.13 (being investigated)
-- Very old firmware versions may use a different protocol
-
-## Developer Information
-
-### Test Service
-
-The integration provides a `comelit_intercom.test_connection` service for debugging:
-```yaml
-service: comelit_intercom.test_connection
-data:
-  ip: "192.168.1.100"
-  token: "your_token_here"
-```
-
-This will test the connection and report available doors in the logs.
-
-### Protocol Implementation
-
-The Python implementation handles:
-- Binary/JSON message encoding/decoding
-- Channel lifecycle management with proper IDs
-- Timeout handling for unreliable device responses
-- Proper byte alignment and null termination
-- Request ID tracking
-
-For protocol analysis tools and captures, see the original comelit-client repository.
+- [nicolas-fricke/ha-component-comelit-intercom](https://github.com/nicolas-fricke/ha-component-comelit-intercom) — the original integration this is built upon.
+- [antoiba86/hass-comelit-intercom-local](https://github.com/antoiba86/hass-comelit-intercom-local) — local video stack reference.
+- [madchicken/comelit-client](https://github.com/madchicken/comelit-client) — ICONA Bridge protocol reference.
 
 ## License
 
-This project is licensed under the GPL-3.0 License.
-
-## Development Note
-
-This integration was developed primarily using Claude Code (Anthropic's AI assistant). The entire codebase, including protocol reverse engineering, Python implementation, and Home Assistant integration, was written by Claude Code with supervision, testing, and high-level guidance from the maintainer. This approach allowed for rapid development of a complex integration that might have otherwise taken significantly longer to create manually.
-
-## Disclaimer
-
-This integration is not affiliated with or endorsed by Comelit Group S.p.A. It's a community project based on reverse engineering efforts.
-
-**Note**: This integration is specifically for Comelit intercom systems. For Comelit SimpleHome alarm systems, use the [official Comelit integration](https://www.home-assistant.io/integrations/comelit/).
+See [LICENSE](LICENSE).
