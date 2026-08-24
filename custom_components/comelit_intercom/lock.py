@@ -56,8 +56,6 @@ class _ComelitOpenerLock(ComelitEntity, LockEntity):
 class ComelitDoorLock(_ComelitOpenerLock):
     """A Comelit door as a lock."""
 
-    _attr_icon = "mdi:door-open"
-
     def __init__(
         self, coordinator: ComelitDataUpdateCoordinator, door: dict[str, Any]
     ) -> None:
@@ -82,8 +80,6 @@ class ComelitDoorLock(_ComelitOpenerLock):
 
 class ComelitActuatorLock(_ComelitOpenerLock):
     """A Comelit ViP actuator (gate/barrier) as a lock."""
-
-    _attr_icon = "mdi:gate"
 
     def __init__(
         self, coordinator: ComelitDataUpdateCoordinator, actuator: dict[str, Any]

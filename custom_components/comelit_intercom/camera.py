@@ -1,4 +1,10 @@
-"""Camera platform: on-demand door-camera snapshots (+ snapshot on ring)."""
+"""Camera platform: live video + snapshots for entrance panels.
+
+Both the live stream and stills come from a single held ViP video call fed
+into a local RTSP server (see :mod:`video_stream`). On a ring the camera
+proactively refreshes its still so automations can attach a fresh image to a
+push notification.
+"""
 
 from __future__ import annotations
 
@@ -7,21 +13,19 @@ import logging
 import time
 from typing import Any
 
-from homeassistant.components.camera import Camera
+from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_HOST, CONF_PORT, CONF_TOKEN, DEFAULT_PORT
 from .coordinator import ComelitDataUpdateCoordinator
 from .entity import ComelitEntity
 from .fcm_push import signal_doorbell
-from .video_snapshot import capture_snapshot
 
 _LOGGER = logging.getLogger(__name__)
 
-# Don't re-negotiate a fresh call for every image request within this window.
+# Serve the cached still for this long before pulling a fresh one.
 _SNAPSHOT_TTL = 8.0
 
 
@@ -47,9 +51,10 @@ async def async_setup_entry(
 
 
 class ComelitEntranceCamera(ComelitEntity, Camera):
-    """On-demand snapshot camera for an entrance panel."""
+    """Live camera + snapshots for an entrance panel."""
 
     _attr_icon = "mdi:doorbell-video"
+    _attr_supported_features = CameraEntityFeature.STREAM
 
     def __init__(
         self,
@@ -84,10 +89,14 @@ class ComelitEntranceCamera(ComelitEntity, Camera):
         if payload.get("source") == "cloud" or caller == self._entrance:
             self.hass.async_create_task(self._refresh(force=True))
 
+    async def async_stream_source(self) -> str | None:
+        """Return the local RTSP URL for live view (starts the call if needed)."""
+        return await self.coordinator.stream.async_stream_source(self._entrance)
+
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        """Return a snapshot, negotiating a fresh one if the cache is stale."""
+        """Return a still, pulling a fresh one from the stream if stale."""
         if self._image and (time.monotonic() - self._image_ts) < _SNAPSHOT_TTL:
             return self._image
         await self._refresh()
@@ -95,7 +104,7 @@ class ComelitEntranceCamera(ComelitEntity, Camera):
 
     async def _refresh(self, force: bool = False) -> None:
         if self._lock.locked():
-            # A capture is already in progress; the caller will get the cached one.
+            # A capture is already in progress; the caller gets the cached one.
             return
         async with self._lock:
             if (
@@ -104,17 +113,7 @@ class ComelitEntranceCamera(ComelitEntity, Camera):
                 and (time.monotonic() - self._image_ts) < _SNAPSHOT_TTL
             ):
                 return
-            vip = self.coordinator.vip_config or {}
-            entry = self.coordinator.entry
-            image = await capture_snapshot(
-                self.hass,
-                host=entry.data[CONF_HOST],
-                port=entry.data.get(CONF_PORT, DEFAULT_PORT),
-                token=entry.data[CONF_TOKEN],
-                apt_address=vip.get("apt-address", ""),
-                apt_subaddress=vip.get("apt-subaddress", 0),
-                entrance_address=self._entrance,
-            )
+            image = await self.coordinator.stream.async_get_image(self._entrance)
             if image:
                 self._image = image
                 self._image_ts = time.monotonic()

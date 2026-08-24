@@ -62,4 +62,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ComelitConfigEntry) -> 
     coordinator = entry.runtime_data
     if coordinator.events_manager is not None:
         await coordinator.events_manager.async_stop()
+    await coordinator.stream.async_shutdown()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
