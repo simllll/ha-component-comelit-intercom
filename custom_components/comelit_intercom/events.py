@@ -1,14 +1,18 @@
 """Unified doorbell events manager: local (CTPP) primary, cloud (FCM) fallback.
 
 Prefers the local held-registration path (no internet, identifies which
-doorbell). If the local registration can't be established or keeps dropping,
-falls back to Comelit cloud push (FCM). Exposes the active source
-(local / cloud / none) to HA.
+doorbell). The local path now ATTACHES to the coordinator's single shared CTPP
+registration (see :class:`VipEventListener`) instead of opening its own second
+raw socket — two CTPP registrations on one ViP identity make the device drop
+video. If the local registration can't be established or keeps dropping, falls
+back to Comelit cloud push (FCM). Exposes the active source (local / cloud /
+none) to HA.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any
 
@@ -17,16 +21,11 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
-    CONF_HOST,
-    CONF_PORT,
-    CONF_PUSH_TOKEN,
-    CONF_TOKEN,
-    DEFAULT_PORT,
     DOMAIN,
     EVENT_DOORBELL,
 )
 from .fcm_push import ComelitPushManager, signal_doorbell
-from .local_events import ComelitLocalEventListener
+from .icona.vip_listener import VipEventListener
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,9 +33,7 @@ SOURCE_LOCAL = "local"
 SOURCE_CLOUD = "cloud"
 SOURCE_NONE = "none"
 
-# Local failures before falling back to cloud.
-_LOCAL_FAILURE_THRESHOLD = 3
-# How long to wait for the local path to register before starting cloud.
+# How long to wait for the local path to attach before considering fallback.
 _LOCAL_GRACE_SECONDS = 20
 
 
@@ -71,7 +68,13 @@ def address_matches(caller: str | None, addr: str | None) -> bool:
 
 
 class ComelitEventsManager:
-    """Owns the local listener + FCM manager and picks the active source."""
+    """Owns the local VIP listener + FCM manager and picks the active source.
+
+    The local listener attaches to the coordinator's shared CTPP connection.
+    The coordinator drives attach/detach on connect/reconnect/unload; the
+    stream manager drives pause/resume around a video session (video reuses the
+    same CTPP channel, so the listener must yield it while video is up).
+    """
 
     def __init__(
         self, hass: HomeAssistant, entry: ConfigEntry, coordinator
@@ -79,11 +82,15 @@ class ComelitEventsManager:
         self.hass = hass
         self.entry = entry
         self.coordinator = coordinator
-        self._local: ComelitLocalEventListener | None = None
+        self._local: VipEventListener | None = None
         self._fcm: ComelitPushManager | None = None
         self._monitor: asyncio.Task | None = None
         self._source = SOURCE_NONE
         self._fcm_started = False
+        # True while a video session has borrowed the CTPP channel — the
+        # listener is paused, but that is expected and must NOT trigger the
+        # cloud fallback.
+        self._paused_for_video = False
 
     @property
     def source(self) -> str:
@@ -91,27 +98,19 @@ class ComelitEventsManager:
 
     # --- lifecycle -------------------------------------------------------
     async def async_start(self) -> None:
-        vip = self.coordinator.vip_config or {}
-        apt = vip.get("apt-address")
-        sub = vip.get("apt-subaddress", 0)
-        token = (
-            self.entry.options.get(CONF_PUSH_TOKEN)
-            or self.entry.data.get(CONF_PUSH_TOKEN)
-            or self.entry.data[CONF_TOKEN]
-        )
-        host = self.entry.data[CONF_HOST]
-        port = self.entry.data.get(CONF_PORT, DEFAULT_PORT)
+        """Create the FCM fallback and start the source-selection monitor.
 
+        The local listener itself is attached by the coordinator once the
+        shared CTPP connection is up (async_attach_local); attach may already
+        have happened by the time this runs.
+        """
         # Cloud manager is created now but only started as a fallback.
         self._fcm = ComelitPushManager(
-            self.hass, self.entry, lambda: self.coordinator.vip_config, on_ring=self._handle_ring
+            self.hass,
+            self.entry,
+            lambda: self.coordinator.vip_config,
+            on_ring=self._handle_ring,
         )
-
-        if apt:
-            self._local = ComelitLocalEventListener(
-                host, port, token, apt, sub, self._handle_ring, self._on_local_state
-            )
-            await self._local.async_start()
 
         self._monitor = self.entry.async_create_background_task(
             self.hass, self._monitor_loop(), "comelit_events_monitor"
@@ -120,17 +119,71 @@ class ComelitEventsManager:
     async def async_stop(self) -> None:
         if self._monitor:
             self._monitor.cancel()
-        if self._local:
-            await self._local.async_stop()
+        await self.async_detach_local()
         if self._fcm and self._fcm_started:
             await self._fcm.async_stop()
 
-    # --- source selection ------------------------------------------------
-    @callback
-    def _on_local_state(self, _state: str) -> None:
-        # Re-evaluate promptly on any local state change.
-        self.hass.async_create_task(self._evaluate())
+    # --- local (shared CTPP) attach/detach -------------------------------
+    async def async_attach_local(self) -> None:
+        """Attach the VIP listener to the shared client's CTPP channel.
 
+        Called by the coordinator after the shared connection + CTPP are up.
+        """
+        if self._paused_for_video:
+            return
+        client = self.coordinator.shared_client
+        if client is None:
+            return
+        # Replace any stale listener.
+        await self._stop_local()
+        vip = self.coordinator.vip_config or {}
+        apt = vip.get("apt-address", "")
+        sub = vip.get("apt-subaddress", 0)
+        listener = VipEventListener(
+            client,
+            apt,
+            sub,
+            self._handle_ring,
+            init_ts=self.coordinator.ctpp_init_ts,
+        )
+        try:
+            await listener.start()
+            self._local = listener
+            _LOGGER.debug("Local doorbell listener attached")
+            await self._evaluate()
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("Failed to attach local doorbell listener", exc_info=True)
+            self._local = None
+            await self._evaluate()
+
+    async def async_detach_local(self) -> None:
+        """Stop the local listener (on unload / reconnect)."""
+        await self._stop_local()
+
+    async def async_pause_local(self) -> None:
+        """Pause the listener so a video session can reuse the CTPP channel.
+
+        Leaves CTPP/CSPB open; only cancels the read loop.
+        """
+        self._paused_for_video = True
+        if self._local is not None:
+            with contextlib.suppress(Exception):
+                await self._local.stop_task()
+            self._local = None
+            _LOGGER.debug("Local doorbell listener paused for video")
+
+    async def async_resume_local(self) -> None:
+        """Resume the listener after a video session released the CTPP channel."""
+        self._paused_for_video = False
+        await self.async_attach_local()
+
+    async def _stop_local(self) -> None:
+        if self._local is not None:
+            with contextlib.suppress(Exception):
+                await self._local.stop()
+            self._local = None
+
+    # --- source selection ------------------------------------------------
     async def _monitor_loop(self) -> None:
         # Give local a grace period to come up before considering fallback.
         await asyncio.sleep(_LOCAL_GRACE_SECONDS)
@@ -139,7 +192,12 @@ class ComelitEventsManager:
             await asyncio.sleep(30)
 
     async def _evaluate(self) -> None:
-        local_ok = self._local is not None and self._local.stable
+        # While video has borrowed CTPP, the listener is intentionally paused —
+        # keep the current source rather than flapping to cloud/none.
+        if self._paused_for_video:
+            return
+
+        local_ok = self._local is not None and self._local.running
         if local_ok:
             new_source = SOURCE_LOCAL
             if self._fcm_started:
@@ -147,21 +205,15 @@ class ComelitEventsManager:
                 await self._fcm.async_stop()
                 self._fcm_started = False
         else:
-            local_failing = (
-                self._local is None
-                or self._local.consecutive_failures >= _LOCAL_FAILURE_THRESHOLD
-            )
-            if not local_failing:
-                # Local is mid-reconnect (transient) — keep the current source
-                # rather than flapping to "none".
-                return
-            if not self._fcm_started:
-                _LOGGER.info("Local events unavailable; starting cloud (FCM) fallback")
+            if not self._fcm_started and self._fcm is not None:
+                _LOGGER.info(
+                    "Local events unavailable; starting cloud (FCM) fallback"
+                )
                 await self._fcm.async_start()
                 self._fcm_started = True
             new_source = (
                 SOURCE_CLOUD
-                if self._fcm_started and self._fcm._fcm_token
+                if self._fcm_started and self._fcm and self._fcm._fcm_token
                 else SOURCE_NONE
             )
         self._set_source(new_source)
