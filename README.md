@@ -95,6 +95,7 @@ doors/gates, and create the entities below.
 | Last ring | `sensor` (timestamp) | Time of the most recent ring |
 | Ring count | `sensor` (total increasing) | Number of rings (persists across restarts) |
 | Events source | `sensor` (enum: local/cloud/none) | Which delivery path is active |
+| Entrance camera | `camera` | On-demand door snapshot; auto-refreshes on that entrance's ring |
 
 > Openers appear as **both** a `button` and a `lock`. Use whichever fits your
 > dashboard/automations and disable the other if you like.
@@ -144,9 +145,11 @@ Open the integration → **Configure**:
 - **No door/gate open-state** — the gates are momentary relay pulses and the
   device reports no persistent open/closed state, so opener entities are
   `button`s, not locks/covers.
-- **Video is not yet supported.** The door camera on current firmware uses a
-  WebRTC/cloud-signalled stream tied to an active call; a native camera entity
-  is a work in progress.
+- **Video** is currently **snapshot-only**: the entrance `camera` pulls a still
+  image on demand (and on ring) by briefly negotiating the intercom's H.264
+  video locally. Live streaming (RTSP → go2rtc) is planned. Requires PyAV
+  (installed automatically). Note: each snapshot briefly places a video call to
+  the entrance panel.
 
 ## How It Works
 
