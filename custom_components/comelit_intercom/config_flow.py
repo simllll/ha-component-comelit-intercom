@@ -20,21 +20,36 @@ from .const import (
     CONF_ENABLE_NOTIFICATIONS,
     CONF_PUSH_TOKEN,
     CONF_USER_MATCH,
+    CONF_WEB_PASSWORD,
     DEFAULT_PORT,
+    DEFAULT_WEB_PASSWORD,
     DOMAIN,
 )
 from .token_extractor import extract_token
+from .user_provisioning import provision_dedicated_user
 
 _LOGGER = logging.getLogger(__name__)
 
-STEP_USER_DATA_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_HOST): str,
-        vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
-        vol.Optional(CONF_USER_MATCH): str,
-        vol.Optional(CONF_TOKEN): str,
-    }
-)
+
+def _base_schema(default_host: str | None = None) -> vol.Schema:
+    """Build the user-step schema, optionally pre-filling a discovered host."""
+    host_field = (
+        vol.Required(CONF_HOST, default=default_host)
+        if default_host
+        else vol.Required(CONF_HOST)
+    )
+    return vol.Schema(
+        {
+            host_field: str,
+            vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
+            vol.Optional(CONF_WEB_PASSWORD, default=DEFAULT_WEB_PASSWORD): str,
+            vol.Optional(CONF_USER_MATCH): str,
+            vol.Optional(CONF_TOKEN): str,
+        }
+    )
+
+
+STEP_USER_DATA_SCHEMA = _base_schema()
 
 
 class CannotConnect(HomeAssistantError):
@@ -45,43 +60,62 @@ class InvalidAuth(HomeAssistantError):
     """Error to indicate there is invalid auth."""
 
 
+async def _safe(coro, timeout: float = 30.0):
+    """Await a coroutine, returning None on timeout or any error."""
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except TimeoutError:
+        _LOGGER.error("Operation timed out after %ss", timeout)
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.error("Operation failed: %s", err)
+    return None
+
+
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Validate the user input allows us to connect."""
     _LOGGER.info("Starting validation for Comelit device at %s", data[CONF_HOST])
 
     data = dict(data)
+    host = data[CONF_HOST]
     user_match = data.get(CONF_USER_MATCH)
+    web_password = data.get(CONF_WEB_PASSWORD, DEFAULT_WEB_PASSWORD)
     token = data.get(CONF_TOKEN)
 
-    # No explicit token: extract one from a device backup (default password).
-    # If a dedicated user name/email is given, extract *that* user's token
-    # (pair it once via the Comelit app first) — this gives HA its own identity,
-    # required for cloud-free local doorbell events. Otherwise fall back to the
-    # first (monitor) token.
-    if not token:
-        _LOGGER.info("No token provided, extracting from backup (match=%s)", user_match)
-        try:
-            token = await asyncio.wait_for(
-                extract_token(data[CONF_HOST], match=user_match), timeout=30.0
-            )
-        except TimeoutError:
-            _LOGGER.error("Token extraction timed out after 30 seconds")
-            token = None
-        except Exception as e:  # noqa: BLE001
-            _LOGGER.error(f"Token extraction failed with error: {e}")
-            token = None
+    # Resolve a usable token if none was supplied explicitly:
+    #   1. A dedicated user name/email → extract *that* user's token from a
+    #      backup (it must have been paired via the Comelit app first).
+    #   2. Otherwise → auto-provision a dedicated "Home Assistant" user and mint
+    #      its token entirely locally (no app, no cloud). Reuse an existing one
+    #      if a previous setup already created it.
+    if not token and user_match:
+        _LOGGER.info("Extracting token for dedicated user %r", user_match)
+        token = await _safe(
+            extract_token(host, password=web_password, match=user_match)
+        )
         if not token:
-            if user_match:
-                raise InvalidAuth(
-                    f"No user matching '{user_match}' found. Create that user in the "
-                    "device web UI (port 8080) and pair it in the Comelit app first."
-                )
             raise InvalidAuth(
-                "Failed to extract token automatically. Check the device is reachable "
-                "and uses the default 'comelit' password, or enter a token manually."
+                f"No user matching '{user_match}' found. Create that user in the "
+                "device web UI (port 8080) and pair it in the Comelit app first."
             )
-        data[CONF_TOKEN] = token
-        data.pop(CONF_USER_MATCH, None)
+    elif not token:
+        _LOGGER.info("Auto-provisioning a dedicated Home Assistant user")
+        # provision_dedicated_user reuses an existing HA identity if present,
+        # otherwise creates one and mints its token locally.
+        token = await _safe(
+            provision_dedicated_user(host, password=web_password), timeout=60.0
+        )
+        if not token:
+            raise InvalidAuth(
+                "Failed to auto-provision a user. Check the device is reachable and "
+                "the web password is correct, or enter a token manually."
+            )
+
+    if not token:
+        raise InvalidAuth("No authentication token available")
+
+    data[CONF_TOKEN] = token
+    data.pop(CONF_USER_MATCH, None)
+    data.pop(CONF_WEB_PASSWORD, None)
 
     client = IconaBridgeClient(data[CONF_HOST], data.get(CONF_PORT, DEFAULT_PORT))
 
@@ -172,16 +206,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def _user_schema(self) -> vol.Schema:
         """User form schema, pre-filling a DHCP-discovered host if any."""
-        if not self._discovered_host:
-            return STEP_USER_DATA_SCHEMA
-        return vol.Schema(
-            {
-                vol.Required(CONF_HOST, default=self._discovered_host): str,
-                vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
-                vol.Optional(CONF_USER_MATCH): str,
-                vol.Optional(CONF_TOKEN): str,
-            }
-        )
+        return _base_schema(self._discovered_host)
 
     async def async_step_dhcp(
         self, discovery_info: DhcpServiceInfo
@@ -239,7 +264,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=STEP_USER_DATA_SCHEMA,
+            data_schema=self._user_schema(),
             errors=errors,
             description_placeholders={
                 "token_help": "Leave token empty to try automatic extraction"

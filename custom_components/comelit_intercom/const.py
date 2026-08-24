@@ -9,10 +9,18 @@ CONF_TOKEN = "token"
 # Name/email of a dedicated user (paired via the Comelit app) whose token to
 # extract from a device backup — so Home Assistant uses its own identity.
 CONF_USER_MATCH = "dedicated_user"
+# Web-UI (port 8080) admin password, used to auto-provision a dedicated user
+# and to extract tokens from device backups.
+CONF_WEB_PASSWORD = "web_password"
 
 # Default values
 DEFAULT_NAME = "Comelit Intercom"
 DEFAULT_PORT = 64100
+# Web-UI (config/backup) port and its factory-default admin password.
+DEFAULT_WEB_PORT = 8080
+DEFAULT_WEB_PASSWORD = "comelit"
+# Name of the dedicated user the integration auto-creates for its own identity.
+HA_USER_NAME = "Home Assistant"
 
 # Update interval (in seconds)
 UPDATE_INTERVAL = 300  # 5 minutes
