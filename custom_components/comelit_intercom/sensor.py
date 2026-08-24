@@ -41,8 +41,8 @@ async def async_setup_entry(
     )
 
 
-class ComelitLastRingSensor(SensorEntity):
-    """Timestamp of the most recent doorbell ring."""
+class ComelitLastRingSensor(RestoreSensor):
+    """Timestamp of the most recent doorbell ring (persisted across restarts)."""
 
     _attr_has_entity_name = True
     _attr_name = "Last ring"
@@ -63,7 +63,10 @@ class ComelitLastRingSensor(SensorEntity):
         return self._value
 
     async def async_added_to_hass(self) -> None:
-        """Subscribe to ring dispatches."""
+        """Restore the last ring time and subscribe to ring dispatches."""
+        last = await self.async_get_last_state()
+        if last is not None and last.state not in (None, "unknown", "unavailable"):
+            self._value = dt_util.parse_datetime(last.state)
         self.async_on_remove(
             async_dispatcher_connect(
                 self.hass,
