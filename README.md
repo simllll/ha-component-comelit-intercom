@@ -27,8 +27,9 @@ for ring notifications).
   - **Cloud fallback**: if a local registration can't be held, it automatically
     falls back to Comelit's cloud push (FCM). An **Events source** sensor shows
     `local` / `cloud` / `none`.
-- 🎥 **Entrance camera** — on-demand snapshot (and a fresh snapshot on ring),
-  decoded locally from the intercom's own H.264 video.
+- 🎥 **Entrance camera** — live video plus stills, decoded locally from the
+  intercom's own H.264 video. The still **refreshes automatically on that
+  entrance's ring**, so automations can attach a fresh image to a notification.
 - 🔑 **Dedicated identity** — use a Home Assistant user paired via the app so it
   doesn't clash with your phone or the wall monitor (needed for local events).
 - 📈 **Sensors** — connectivity, ringing, last ring, ring count, events source.
@@ -99,7 +100,7 @@ any time to change the IP or view/edit the current token.
 | Door / gate | `lock` (open) | One per door and ViP actuator |
 | Doorbell (per entrance) | `event` (doorbell) | Fires `ring` / `missed_call` |
 | Floor call | `event` (doorbell) | The apartment's own station ("Etagen") |
-| Entrance camera | `camera` | On-demand snapshot; refreshes on that entrance's ring |
+| Entrance camera | `camera` | Live video (on-demand) + stills; still refreshes on that entrance's ring |
 | Connectivity | `binary_sensor` (connectivity) | ICONA bridge reachable |
 | Ringing | `binary_sensor` (sound) | On during a ring (auto-off 30 s) |
 | Last ring | `sensor` (timestamp) | Most recent ring |
@@ -120,6 +121,37 @@ registration can't be held (e.g. the monitor token is in use), it transparently
 falls back to cloud push. Toggle notifications and override the push identity in
 the integration's **Configure** dialog.
 
+## Camera & video
+
+The entrance `camera` provides both a **live feed** and **stills**, decoded
+locally from the intercom's H.264 video:
+
+- **Live feed is on-demand.** It starts automatically when you open the camera's
+  live view (Home Assistant connects to a local RTSP stream the integration
+  serves) and stops on its own a short time after you stop watching. There is no
+  manual on/off — just open or close the camera. The intercom serves only one
+  video call at a time.
+- **Stills refresh on ring.** When that entrance rings, the camera pulls a fresh
+  snapshot automatically, so an automation can attach a current image to a push
+  notification. You can also request a still any time (e.g. `camera.snapshot`);
+  it's taken from a short video call to the panel.
+
+Example — notify with a snapshot on ring:
+
+```yaml
+automation:
+  - alias: Doorbell push with snapshot
+    trigger:
+      - platform: event
+        event_type: comelit_intercom_doorbell
+    action:
+      - service: notify.mobile_app_your_phone
+        data:
+          message: "Someone's at the door"
+          data:
+            image: /api/camera_proxy/camera.comelit_intercom_entrance
+```
+
 ## Options
 
 Integration → **Configure**:
@@ -133,8 +165,10 @@ Integration → **Configure**:
   internet on the intercom and HA).
 - **No door/gate open-state** — the openers are momentary relay pulses with no
   state feedback, hence `lock` entities that "open".
-- **Video is snapshot-only** for now; live streaming (RTSP → go2rtc) is planned.
-  Each snapshot briefly places a video call to the entrance panel.
+- **One video call at a time** — the intercom serves a single call, so live view
+  and stills share it. Continuous live view may occasionally drop and reconnect.
+- **Video only (no two-way audio yet)** — receiving the entrance's audio/video
+  works; talking back is not implemented.
 
 ## Credits
 
