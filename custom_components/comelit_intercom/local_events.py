@@ -310,8 +310,8 @@ class ComelitLocalEventListener:
         while self._running:
             try:
                 req, body = await self._read_frame(_READ_IDLE_TIMEOUT)
-            except (TimeoutError, asyncio.IncompleteReadError):
-                raise RuntimeError("connection idle/closed")
+            except (TimeoutError, asyncio.IncompleteReadError) as err:
+                raise RuntimeError("connection idle/closed") from err
             if len(body) < 2:
                 continue
             # Device-initiated channel END → ACK so the device can re-open.

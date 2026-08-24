@@ -17,10 +17,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
-    CONF_PUSH_TOKEN,
-    CONF_TOKEN,
     CONF_HOST,
     CONF_PORT,
+    CONF_PUSH_TOKEN,
+    CONF_TOKEN,
     DEFAULT_PORT,
     DOMAIN,
     EVENT_DOORBELL,

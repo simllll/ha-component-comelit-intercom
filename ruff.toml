@@ -1,0 +1,16 @@
+# Ruff config for the Comelit ICONA integration.
+target-version = "py312"
+
+# The icona/ subpackage is vendored third-party code (from
+# antoiba86/hass-comelit-intercom-local) — kept intact, not linted here.
+extend-exclude = ["custom_components/comelit_intercom/icona"]
+
+[lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = [
+  "E501",  # line length is handled by the formatter, not enforced here
+]
+
+[lint.per-file-ignores]
+# Test/diagnostic helper services keep broad excepts intentionally.
+"custom_components/comelit_intercom/test_service.py" = ["BLE001"]

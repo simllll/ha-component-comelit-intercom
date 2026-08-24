@@ -22,11 +22,11 @@ from homeassistant.helpers.storage import Store
 
 from .comelit_client import IconaBridgeClient
 from .const import (
+    CONF_HOST,
+    CONF_PORT,
     CONF_PUSH_TOKEN,
     CONF_TOKEN,
     DEFAULT_PORT,
-    CONF_PORT,
-    CONF_HOST,
     DOMAIN,
     EVENT_DOORBELL,
     FCM_API_KEY,
