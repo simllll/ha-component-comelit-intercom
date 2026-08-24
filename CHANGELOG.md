@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.3.2](https://github.com/simllll/hass-comelit-icona/compare/v1.3.1...v1.3.2) (2026-08-24)
+
+
+### Bug Fixes
+
+* replace non-working activation-code path with dedicated-user token extraction ([bd5713b](https://github.com/simllll/hass-comelit-icona/commit/bd5713b6a33e2ffa71b99e7f5b831fe93fb58d08))
+
 ## [1.3.1](https://github.com/simllll/hass-comelit-icona/compare/v1.3.0...v1.3.1) (2026-08-24)
 
 
