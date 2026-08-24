@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.4.0](https://github.com/simllll/hass-comelit-icona/compare/v1.3.2...v1.4.0) (2026-08-24)
+
+
+### Features
+
+* auto-provision a dedicated user with fully-local token minting ([#4](https://github.com/simllll/hass-comelit-icona/issues/4)) ([0ef6cc2](https://github.com/simllll/hass-comelit-icona/commit/0ef6cc2d31a863f4d64d3d713b685606b37028c2))
+
 ## [1.3.2](https://github.com/simllll/hass-comelit-icona/compare/v1.3.1...v1.3.2) (2026-08-24)
 
 
