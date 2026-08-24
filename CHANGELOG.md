@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.5.1](https://github.com/simllll/hass-comelit-icona/compare/v1.5.0...v1.5.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* use a fresh one-shot call for snapshots ([#10](https://github.com/simllll/hass-comelit-icona/issues/10)) ([377ff04](https://github.com/simllll/hass-comelit-icona/commit/377ff04e2ada93fbe0ade0083466b138813be026))
+
 ## [1.5.0](https://github.com/simllll/hass-comelit-icona/compare/v1.4.0...v1.5.0) (2026-08-24)
 
 
