@@ -6,13 +6,15 @@
         "data": {
           "host": "IP Address",
           "port": "Port",
-          "dedicated_user": "Dedicated user name or email (recommended)",
+          "web_password": "Device web password",
+          "dedicated_user": "Dedicated user name or email (optional)",
           "token": "Token (optional)"
         },
-        "description": "Enter the IP address of your Comelit intercom. Recommended for local (cloud-free) doorbell events: in the device web UI (port 8080, users page) create a user for Home Assistant and pair it once in the Comelit app, then enter its name or email here so Home Assistant uses its own identity. Otherwise leave both empty to auto-extract the wall-monitor token using the default 'comelit' password.",
+        "description": "Enter the IP address of your Comelit intercom. Just leave the rest as-is: Home Assistant will automatically create its own dedicated user on the device and activate it locally (no cloud, no app). This needs the device web password (the factory default is 'comelit'). Advanced options: point at a user you paired yourself via the Comelit app, or paste an existing token.",
         "data_description": {
           "port": "ICONA Bridge port (default 64100 - leave as-is unless you use port forwarding)",
-          "dedicated_user": "Name or email of a user you created and paired via the app; its token is read from a device backup",
+          "web_password": "Password of the device web UI on port 8080 (factory default 'comelit')",
+          "dedicated_user": "Advanced: name or email of a user you created and paired via the app; its token is read from a device backup instead of creating a new user",
           "token": "Advanced: use an existing user token directly"
         }
       }
