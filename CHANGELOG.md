@@ -4,6 +4,20 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.6.0](https://github.com/simllll/hass-comelit-icona/compare/v1.5.1...v1.6.0) (2026-08-24)
+
+
+### Features
+
+* map MSVF model code to 6741W Mini ViP ([#15](https://github.com/simllll/hass-comelit-icona/issues/15)) ([3806909](https://github.com/simllll/hass-comelit-icona/commit/38069093318f7fbd7ae482f8b192ef179b0dd9b6))
+
+
+### Bug Fixes
+
+* live view — override stream_source (was async_stream_source) ([#16](https://github.com/simllll/hass-comelit-icona/issues/16)) ([59f178a](https://github.com/simllll/hass-comelit-icona/commit/59f178aa7a154ac3403ff97426e941c2e0879c7f))
+* match doorbell caller addresses across device models ([#17](https://github.com/simllll/hass-comelit-icona/issues/17)) ([61c9a26](https://github.com/simllll/hass-comelit-icona/commit/61c9a261d17b395efd08e32f3cb80efbd5759f2f))
+* persist last-ring timestamp across restarts ([#12](https://github.com/simllll/hass-comelit-icona/issues/12)) ([3012e9a](https://github.com/simllll/hass-comelit-icona/commit/3012e9a03f2b6594d0cee43f830e8ceef69449f5))
+
 ## [1.5.1](https://github.com/simllll/hass-comelit-icona/compare/v1.5.0...v1.5.1) (2026-08-24)
 
 
