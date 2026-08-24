@@ -178,6 +178,11 @@ class LocalRtspServer:
         """Return the RTSP URL that go2rtc should connect to."""
         return f"rtsp://{self._bind_host}:{self._rtsp_port}/intercom"
 
+    @property
+    def client_count(self) -> int:
+        """Number of RTSP clients currently in PLAY state."""
+        return len(self._active_clients)
+
     async def start(self) -> str:
         """Start the RTSP server, bind UDP sockets, and start feed tasks.
 

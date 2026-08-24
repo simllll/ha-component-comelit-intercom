@@ -21,6 +21,7 @@ from .const import (
     DOMAIN,
     UPDATE_INTERVAL,
 )
+from .video_stream import ComelitStreamManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,6 +40,10 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.server_info: dict[str, Any] = {}
         # Set by __init__.py when doorbell events are enabled.
         self.events_manager = None
+        # Lazy live-video/snapshot manager (started on first camera use).
+        self.stream = ComelitStreamManager(
+            hass, self.host, self.port, self.token, lambda: self.vip_config
+        )
 
         super().__init__(
             hass,
