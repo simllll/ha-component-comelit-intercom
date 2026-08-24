@@ -37,8 +37,8 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.client = IconaBridgeClient(self.host, self.port)
         self.vip_config: dict[str, Any] = {}
         self.server_info: dict[str, Any] = {}
-        # Set by __init__.py when push notifications are enabled.
-        self.push_manager = None
+        # Set by __init__.py when doorbell events are enabled.
+        self.events_manager = None
 
         super().__init__(
             hass,

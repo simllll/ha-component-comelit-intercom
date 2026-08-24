@@ -16,6 +16,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .comelit_client import IconaBridgeClient
 from .const import (
+    CONF_ACTIVATION_CODE,
     CONF_ENABLE_NOTIFICATIONS,
     CONF_PUSH_TOKEN,
     DEFAULT_PORT,
@@ -29,6 +30,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_HOST): str,
         vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
+        vol.Optional(CONF_ACTIVATION_CODE): str,
         vol.Optional(CONF_TOKEN): str,
     }
 )
@@ -46,28 +48,26 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     """Validate the user input allows us to connect."""
     _LOGGER.info("Starting validation for Comelit device at %s", data[CONF_HOST])
 
-    # If no token provided, try to extract it automatically
+    data = dict(data)
+    activation_code = data.get(CONF_ACTIVATION_CODE)
     token = data.get(CONF_TOKEN)
-    if not token:
-        _LOGGER.info("No token provided, attempting automatic extraction")
 
+    # If neither an activation code nor a token was given, try to extract a
+    # token automatically from a device backup (uses the default password).
+    if not activation_code and not token:
+        _LOGGER.info("No token/activation code provided, attempting automatic extraction")
         try:
             token = await asyncio.wait_for(extract_token(data[CONF_HOST]), timeout=30.0)
         except TimeoutError:
             _LOGGER.error("Token extraction timed out after 30 seconds")
             token = None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             _LOGGER.error(f"Token extraction failed with error: {e}")
             token = None
-
         if not token:
             raise InvalidAuth(
-                "Failed to extract token automatically. Please check that the device is accessible and using the default 'comelit' password, or enter your token manually."
+                "Failed to extract token automatically. Please check that the device is accessible and using the default 'comelit' password, provide an activation code, or enter your token manually."
             )
-
-        _LOGGER.info("Successfully extracted token automatically")
-        # Update data with extracted token
-        data = dict(data)
         data[CONF_TOKEN] = token
 
     client = IconaBridgeClient(data[CONF_HOST], data.get(CONF_PORT, DEFAULT_PORT))
@@ -98,9 +98,24 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         raise CannotConnect from err
 
     try:
+        # Mint a dedicated user token from the activation code, if provided.
+        if activation_code and not token:
+            _LOGGER.info("Activating with cloud activation code")
+            token = await asyncio.wait_for(
+                client.activate_with_code(activation_code, "Home Assistant"),
+                timeout=20.0,
+            )
+            if not token:
+                raise InvalidAuth(
+                    "Activation failed — check the activation code (create a user "
+                    "and generate a code in the device web UI at :8080/users.html)"
+                )
+            data[CONF_TOKEN] = token
+            data.pop(CONF_ACTIVATION_CODE, None)
+
         _LOGGER.info("Authenticating with device")
         auth_code = await asyncio.wait_for(
-            client.authenticate(data[CONF_TOKEN]), timeout=15.0
+            client.authenticate(token), timeout=15.0
         )
 
         if auth_code != 200:
@@ -171,10 +186,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         try:
             info = await validate_input(self.hass, user_input)
-            # Get the potentially updated data (with extracted token)
+            # Get the potentially updated data (with extracted/minted token)
             validated_data = user_input.copy()
-            if not user_input.get(CONF_TOKEN) and info.get("token"):
+            if info.get("token"):
                 validated_data[CONF_TOKEN] = info["token"]
+            # The activation code is single-use — don't persist it.
+            validated_data.pop(CONF_ACTIVATION_CODE, None)
         except CannotConnect:
             errors["base"] = "cannot_connect"
         except InvalidAuth as e:

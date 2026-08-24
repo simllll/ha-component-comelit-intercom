@@ -393,6 +393,36 @@ class IconaBridgeClient:
         await self._close_channel(channel)
         return None
 
+    async def activate_with_code(
+        self, cloud_activation_code: str, description: str = "Home Assistant"
+    ) -> str | None:
+        """Mint a dedicated user token from a cloud activation code.
+
+        Sends ``user-cloud-activation`` on the UAUT channel (the code is the
+        credential — no prior auth needed) and returns the minted user-token,
+        or None on failure. Create the user + code in the device web UI
+        (:8080/users.html → add user → generate activation code).
+        """
+        channel = await self._open_channel(Channel.UAUT)
+        msg = {
+            "message": "user-cloud-activation",
+            "cloud-activation-code": cloud_activation_code,
+            "description": description,
+            "message-type": "request",
+            "message-id": 42,
+        }
+        packet = self._create_json_packet(channel.id, msg)
+        await self._write_packet(packet)
+
+        response = await self._read_response()
+        token = None
+        if response and response["type"] == "json":
+            data = response["data"]
+            if data.get("response-code") == 200:
+                token = data.get("user-token")
+        await self._close_channel(channel)
+        return token
+
     async def get_server_info(self) -> dict | None:
         """Fetch server-info (model, firmware, serial, capabilities)."""
         channel = await self._open_channel(Channel.INFO)

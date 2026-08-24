@@ -23,8 +23,8 @@ async def async_setup_entry(
 ) -> None:
     """Set up the doorbell event entity."""
     coordinator: ComelitDataUpdateCoordinator = entry.runtime_data
-    # Only expose the entity if push notifications are enabled for this entry.
-    if getattr(coordinator, "push_manager", None) is None:
+    # Only expose the entity if doorbell events are enabled for this entry.
+    if getattr(coordinator, "events_manager", None) is None:
         return
     async_add_entities([ComelitDoorbellEvent(coordinator)])
 
@@ -65,7 +65,8 @@ class ComelitDoorbellEvent(EventEntity):
         attrs = {
             k: v
             for k, v in payload.items()
-            if k in ("call_id", "notification") and v is not None
+            if k in ("call_id", "notification", "source", "doorbell", "caller")
+            and v is not None
         }
         self._trigger_event(EVENT_TYPE_RING, attrs)
         self.async_write_ha_state()

@@ -6,12 +6,14 @@
         "data": {
           "host": "IP Address",
           "port": "Port",
+          "activation_code": "Activation code (recommended)",
           "token": "Token (optional)"
         },
-        "description": "Enter the IP address of your Comelit intercom device. Token is optional - if not provided, it will be extracted automatically using the default 'comelit' password.",
+        "description": "Enter the IP address of your Comelit intercom. Recommended: create a dedicated user in the device web UI (http://<ip>:8080/users.html → add user → generate activation code) and paste the activation code here — a dedicated identity is required for local (cloud-free) doorbell events. Otherwise leave both empty to auto-extract the token using the default 'comelit' password.",
         "data_description": {
           "port": "ICONA Bridge port (default 64100 - leave as-is unless you use port forwarding)",
-          "token": "Leave empty to automatically extract using default password"
+          "activation_code": "Mints a dedicated token for Home Assistant (best for local events; won't clash with the app/monitor)",
+          "token": "Advanced: use an existing user token instead of an activation code"
         }
       }
     },

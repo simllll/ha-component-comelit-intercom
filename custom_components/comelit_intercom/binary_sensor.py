@@ -30,8 +30,7 @@ async def async_setup_entry(
     """Set up Comelit binary sensors."""
     coordinator: ComelitDataUpdateCoordinator = entry.runtime_data
     entities: list[BinarySensorEntity] = [ComelitConnectivitySensor(coordinator)]
-    if coordinator.push_manager is not None:
-        entities.append(ComelitPushStatusSensor(coordinator))
+    if coordinator.events_manager is not None:
         entities.append(ComelitRingingSensor(coordinator))
     async_add_entities(entities)
 
@@ -56,30 +55,6 @@ class ComelitConnectivitySensor(ComelitEntity, BinarySensorEntity):
     @property
     def available(self) -> bool:
         """Connectivity sensor is always available (it reports the state)."""
-        return True
-
-
-class ComelitPushStatusSensor(ComelitEntity, BinarySensorEntity):
-    """Diagnostic: whether cloud-push ring notifications are active."""
-
-    _attr_name = "Ring notifications"
-    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_icon = "mdi:bell-ring"
-
-    def __init__(self, coordinator: ComelitDataUpdateCoordinator) -> None:
-        """Initialize."""
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.unique_id}_push_status"
-
-    @property
-    def is_on(self) -> bool:
-        """Return True when the FCM listener is registered and running."""
-        pm = self.coordinator.push_manager
-        return bool(pm and getattr(pm, "_started", False) and pm._fcm_token)
-
-    @property
-    def available(self) -> bool:
         return True
 
 
