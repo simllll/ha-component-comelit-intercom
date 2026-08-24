@@ -4,6 +4,18 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.7.0](https://github.com/simllll/hass-comelit-icona/compare/v1.6.1...v1.7.0) (2026-08-24)
+
+
+### Code Refactoring
+
+* single shared connection for events + video (fix CTPP contention) ([#21](https://github.com/simllll/hass-comelit-icona/issues/21)) ([6f08468](https://github.com/simllll/hass-comelit-icona/commit/6f084684052d58cbf350e3b16834a750d3960f1f))
+
+
+### Miscellaneous
+
+* release refactor commits and cut 1.7.0 ([#22](https://github.com/simllll/hass-comelit-icona/issues/22)) ([d85e5cb](https://github.com/simllll/hass-comelit-icona/commit/d85e5cbee4e50152aa406679a87bd29d4c2f7a82))
+
 ## [1.6.1](https://github.com/simllll/hass-comelit-icona/compare/v1.6.0...v1.6.1) (2026-08-24)
 
 
