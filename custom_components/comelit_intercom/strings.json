@@ -17,6 +17,37 @@
           "dedicated_user": "Advanced: name or email of a user you created and paired via the app; its token is read from a device backup instead of creating a new user",
           "token": "Advanced: use an existing user token directly"
         }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Comelit Intercom",
+        "description": "The token for {host} is no longer valid. Leave the token blank to auto-provision a fresh dedicated user (needs the device web password), or paste a token. The current token is shown below so you can copy it.",
+        "data": {
+          "web_password": "Device web password",
+          "dedicated_user": "Dedicated user name or email (optional)",
+          "token": "Token (optional)"
+        },
+        "data_description": {
+          "web_password": "Password of the device web UI on port 8080 (factory default 'comelit')",
+          "dedicated_user": "Advanced: name or email of a user you paired via the app",
+          "token": "Current token (edit to change, or blank to re-provision)"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Comelit Intercom",
+        "description": "Change the IP address or authentication for {host} without removing the integration.",
+        "data": {
+          "host": "IP Address",
+          "port": "Port",
+          "web_password": "Device web password",
+          "dedicated_user": "Dedicated user name or email (optional)",
+          "token": "Token (optional)"
+        },
+        "data_description": {
+          "port": "ICONA Bridge port (default 64100)",
+          "web_password": "Password of the device web UI on port 8080 (factory default 'comelit')",
+          "dedicated_user": "Advanced: name or email of a user you paired via the app",
+          "token": "Current token (edit to change, or blank to re-provision)"
+        }
       }
     },
     "error": {
@@ -26,7 +57,9 @@
       "unknown": "Unexpected error"
     },
     "abort": {
-      "already_configured": "Device is already configured"
+      "already_configured": "Device is already configured",
+      "reauth_successful": "Re-authentication was successful",
+      "reconfigure_successful": "Reconfiguration was successful"
     }
   },
   "options": {
