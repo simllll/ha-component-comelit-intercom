@@ -1,14 +1,14 @@
-"""Live video streaming (and stream-derived snapshots) for Comelit entrances.
+"""Live video streaming (and stills) for Comelit entrances.
 
-Holds a single ViP video call to an entrance panel, feeding a local RTSP server
-that Home Assistant's stream component (go2rtc) connects to. Snapshots are pulled
-from the same live stream via ffmpeg, which is far more reliable than the old
-one-shot capture (the device delivers media over TCP/RTPC2, which needs a
-sustained, promptly-consumed connection).
+Holds a SINGLE ViP video call to an entrance panel, feeding a local RTSP server
+that Home Assistant's stream component (go2rtc) connects to. Both live view and
+still images come from that one call — the intercom serves only one video call
+at a time, so anything that opens a second, competing call causes the device to
+drop the connection. Keeping a single shared call avoids that churn.
 
-The device serves only one video call at a time, so the call is started lazily
-when a consumer appears and stopped after a short idle period once nobody is
-watching.
+The call starts lazily on first use, is kept alive while anything is watching
+(an RTSP client) or recently asked for a still, is recycled if its media stalls
+(the device dropped it), and is stopped after a short idle period.
 """
 
 from __future__ import annotations
@@ -28,16 +28,20 @@ from .icona.video_call import VideoCallSession
 
 _LOGGER = logging.getLogger(__name__)
 
-# Stop the call this long after the last RTSP client disconnects.
+# Stop the call this long after the last viewer/still request.
 _IDLE_TIMEOUT = 30.0
-# Grace period after starting a call before idle-checking (lets HA connect).
+# Grace period after starting a call before health/idle checking (lets media ramp
+# and HA/go2rtc connect).
 _CONNECT_GRACE = 12.0
-# How long to wait for first media before a snapshot grab.
-_MEDIA_WARMUP = 2.5
+# Recycle the call if no new media packets arrive for this long (device dropped
+# it — e.g. BrokenPipe — so the next request starts a clean one).
+_STALL_TIMEOUT = 10.0
+# How long to wait for a freshly-decoded frame for a still.
+_SNAPSHOT_TIMEOUT = 8.0
 
 
 class ComelitStreamManager:
-    """Owns one persistent RTSP server and an on-demand ViP video call."""
+    """Owns one persistent RTSP server and a single on-demand ViP video call."""
 
     def __init__(
         self,
@@ -59,92 +63,58 @@ class ComelitStreamManager:
         self._entrance: str | None = None
         self._lock = asyncio.Lock()
         self._idle_task: asyncio.Task | None = None
+        self._last_use = 0.0
+
+    def _touch(self) -> None:
+        self._last_use = self.hass.loop.time()
 
     async def async_stream_source(self, entrance: str) -> str | None:
-        """Ensure a call is running to *entrance* and return the RTSP URL."""
+        """Ensure the shared call is running and return the RTSP URL."""
         async with self._lock:
             try:
                 await self._ensure(entrance)
             except Exception as err:  # noqa: BLE001
-                _LOGGER.error("Failed to start video stream: %s", err)
-                await self._stop_session()
+                _LOGGER.error("Failed to start live video call: %s", err)
+                await self._stop_session("start failure")
                 return None
-            return self._server.rtsp_url if self._server else None
+            self._touch()
+            url = self._server.rtsp_url if self._server else None
+            _LOGGER.debug("stream_source(%s) -> %s", entrance, url)
+            return url
 
     async def async_get_image(
         self, entrance: str, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        """Return a fresh JPEG still.
-
-        If a live-view stream is already running we grab a frame from it
-        (the device serves only one call at a time). Otherwise we place a
-        clean, self-contained one-shot call — the reliable pattern for
-        on-ring snapshots, unaffected by the device's ~30s call lease that
-        eventually freezes a long-held stream.
-        """
-        if self._session is not None and self._session.active:
-            rx = self._session.rtp_receiver
-            if rx is not None:
-                try:
-                    return await rx.get_jpeg_frame(timeout=_MEDIA_WARMUP + 5)
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.warning("Snapshot from live stream failed: %s", err)
-                    return None
-        return await self._oneshot_image(entrance)
-
-    async def _oneshot_image(self, entrance: str) -> bytes | None:
-        """Place a short fresh video call, decode one frame, tear down."""
+        """Return a fresh JPEG still from the shared call."""
         async with self._lock:
-            client = IconaBridgeClient(self._host, self._port)
-            server = LocalRtspServer()
-            session: VideoCallSession | None = None
             try:
-                await server.start()
-                await client.connect()
-                ua = await client.open_channel("UAUT", ChannelType.UAUT)
-                resp = await client.send_json(
-                    ua,
-                    {
-                        "message": "access",
-                        "user-token": self._token,
-                        "message-type": "request",
-                        "message-id": 2,
-                    },
-                )
-                if resp.get("response-code") != 200:
-                    _LOGGER.warning(
-                        "Snapshot auth failed (code %s)", resp.get("response-code")
-                    )
-                    return None
-                vip = self._vip() or {}
-                config = DeviceConfig(
-                    apt_address=vip.get("apt-address", ""),
-                    apt_subaddress=vip.get("apt-subaddress", 0),
-                    caller_address=entrance,
-                )
-                session = VideoCallSession(
-                    client, config, auto_timeout=False, rtsp_server=server
-                )
-                await session.start()
-                return await session.rtp_receiver.get_jpeg_frame(
-                    timeout=_MEDIA_WARMUP + 6
-                )
+                await self._ensure(entrance)
             except Exception as err:  # noqa: BLE001
-                _LOGGER.warning("One-shot snapshot failed: %s", err)
+                _LOGGER.error("Snapshot: failed to start video call: %s", err)
+                await self._stop_session("snapshot start failure")
                 return None
-            finally:
-                if session is not None:
-                    with contextlib.suppress(Exception):
-                        await session.stop()
-                with contextlib.suppress(Exception):
-                    await client.disconnect()
-                with contextlib.suppress(Exception):
-                    await server.stop()
+            self._touch()
+            rx = self._session.rtp_receiver if self._session else None
+            if rx is None:
+                return None
+            try:
+                jpeg = await rx.get_jpeg_frame(timeout=_SNAPSHOT_TIMEOUT)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("Snapshot decode failed: %s", err)
+                jpeg = None
+            if jpeg is None:
+                # No fresh frame → the call likely died; drop it so the next
+                # request starts a clean one instead of returning a frozen frame.
+                _LOGGER.debug("Snapshot: no fresh frame, recycling call")
+                await self._stop_session("no fresh frame")
+            else:
+                _LOGGER.debug("Snapshot: %d byte JPEG", len(jpeg))
+            return jpeg
 
     # --- lifecycle -------------------------------------------------------
 
     async def _ensure(self, entrance: str) -> None:
-        """Start the RTSP server and a call to *entrance* if not already up."""
+        """Start the RTSP server + shared call to *entrance* if not already up."""
         if self._server is None:
             self._server = LocalRtspServer()
             await self._server.start()
@@ -155,9 +125,18 @@ class ComelitStreamManager:
             or not self._session.active
             or self._entrance != entrance
         ):
-            await self._stop_session()
+            if self._session is not None:
+                _LOGGER.debug(
+                    "Recreating call (active=%s, entrance %s->%s)",
+                    self._session.active,
+                    self._entrance,
+                    entrance,
+                )
+            await self._stop_session("restart")
             await self._start_session(entrance)
             self._arm_idle_monitor()
+        else:
+            _LOGGER.debug("Reusing existing call to %s", entrance)
 
     async def _start_session(self, entrance: str) -> None:
         client = IconaBridgeClient(self._host, self._port)
@@ -175,7 +154,9 @@ class ComelitStreamManager:
         if resp.get("response-code") != 200:
             with contextlib.suppress(Exception):
                 await client.disconnect()
-            raise RuntimeError(f"authentication failed (code {resp.get('response-code')})")
+            raise RuntimeError(
+                f"authentication failed (code {resp.get('response-code')})"
+            )
 
         self._client = client
         vip = self._vip() or {}
@@ -193,8 +174,9 @@ class ComelitStreamManager:
         self._entrance = entrance
         _LOGGER.info("Live video call started to entrance %s", entrance)
 
-    async def _stop_session(self) -> None:
+    async def _stop_session(self, reason: str = "") -> None:
         if self._session is not None:
+            _LOGGER.debug("Stopping video call (%s)", reason)
             with contextlib.suppress(Exception):
                 await self._session.stop()
             self._session = None
@@ -214,35 +196,64 @@ class ComelitStreamManager:
         )
 
     async def _idle_monitor(self) -> None:
-        """Stop the call once no RTSP client has been connected for a while."""
+        """Recycle a stalled (dropped) call and stop the call when idle."""
         await asyncio.sleep(_CONNECT_GRACE)
-        empty_since: float | None = None
         loop = self.hass.loop
+        last_pkts = -1
+        stalled_since: float | None = None
         while True:
             await asyncio.sleep(2.0)
             session = self._session
             server = self._server
-            if session is None or not session.active or server is None:
+            if session is None or server is None:
                 return
-            if server.client_count > 0:
-                empty_since = None
-                continue
-            now = loop.time()
-            if empty_since is None:
-                empty_since = now
-            elif now - empty_since >= _IDLE_TIMEOUT:
+            if not session.active:
                 async with self._lock:
-                    if self._server and self._server.client_count == 0:
-                        _LOGGER.info("No stream viewers — stopping live video call")
-                        await self._stop_session()
+                    await self._stop_session("inactive")
+                return
+
+            rx = session.rtp_receiver
+            pkts = (
+                rx.tcp_media_packet_count + rx.udp_media_packet_count if rx else 0
+            )
+            now = loop.time()
+
+            # Liveness: media must keep flowing while a call is up.
+            if pkts != last_pkts:
+                last_pkts = pkts
+                stalled_since = None
+            elif stalled_since is None:
+                stalled_since = now
+            elif now - stalled_since >= _STALL_TIMEOUT:
+                _LOGGER.warning(
+                    "Video media stalled %.0fs (device dropped the call?) — recycling",
+                    now - stalled_since,
+                )
+                async with self._lock:
+                    await self._stop_session("media stalled")
+                return
+
+            # Idle: no live viewers and no recent still requests.
+            if (
+                server.client_count == 0
+                and now - self._last_use >= _IDLE_TIMEOUT
+            ):
+                async with self._lock:
+                    if (
+                        self._server
+                        and self._server.client_count == 0
+                        and loop.time() - self._last_use >= _IDLE_TIMEOUT
+                    ):
+                        _LOGGER.info("No viewers/stills — stopping live video call")
+                        await self._stop_session("idle")
                 return
 
     async def async_shutdown(self) -> None:
         """Tear down the call and RTSP server (on entry unload)."""
         async with self._lock:
-            await self._stop_session()
             if self._idle_task and not self._idle_task.done():
                 self._idle_task.cancel()
+            await self._stop_session("shutdown")
             if self._server is not None:
                 with contextlib.suppress(Exception):
                     await self._server.stop()
