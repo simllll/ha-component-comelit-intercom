@@ -1,8 +1,21 @@
-"""DataUpdateCoordinator for Comelit."""
+"""DataUpdateCoordinator for Comelit.
+
+Owns the SINGLE shared, persistent, authenticated ICONA Bridge connection that
+is the one owner of the ViP CTPP registration. Both the doorbell event listener
+and the live-video session ATTACH to / REUSE this one connection's CTPP channel
+— never a second one. Two CTPP registrations on one ViP identity make the
+device drop video after ~3s, so this shared-connection design is load-bearing.
+
+Config, door and actuator operations still use short-lived connections via the
+legacy ``comelit_client`` (they don't hold CTPP, so they don't contend).
+"""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -21,6 +34,9 @@ from .const import (
     DOMAIN,
     UPDATE_INTERVAL,
 )
+from .icona.channels import ChannelType
+from .icona.client import IconaBridgeClient as SharedIconaClient
+from .icona.ctpp import ctpp_init_sequence
 from .video_stream import ComelitStreamManager
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,9 +56,25 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.server_info: dict[str, Any] = {}
         # Set by __init__.py when doorbell events are enabled.
         self.events_manager = None
-        # Lazy live-video/snapshot manager (started on first camera use).
+
+        # --- shared persistent ICONA connection (single CTPP owner) ---------
+        self._shared_client: SharedIconaClient | None = None
+        # Serialises CTPP negotiation: only one of {open, video-start} at a time.
+        self._ctpp_lock = asyncio.Lock()
+        # init_ts used in the last CTPP init on the shared connection — the VIP
+        # listener derives its outgoing ACK timestamps from this.
+        self._ctpp_init_ts: int = 0
+        self._reconnecting = False
+
+        # Live-video/snapshot manager reuses the shared connection's CTPP.
         self.stream = ComelitStreamManager(
-            hass, self.host, self.port, self.token, lambda: self.vip_config
+            hass,
+            self.host,
+            self.port,
+            self.token,
+            lambda: self.vip_config,
+            get_shared_client=lambda: self._shared_client,
+            coordinator=self,
         )
 
         super().__init__(
@@ -115,8 +147,148 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.error("Error communicating with Comelit device: %s", err)
             raise UpdateFailed(f"Error communicating with device: {err}") from err
         finally:
-            # Always close the connection after update
+            # Always close the (config-only) connection after update
             await self.client.shutdown()
+
+    # --- shared connection lifecycle ----------------------------------------
+
+    @property
+    def shared_client(self) -> SharedIconaClient | None:
+        """The single persistent authenticated ICONA client (CTPP owner)."""
+        return self._shared_client
+
+    @property
+    def ctpp_lock(self) -> asyncio.Lock:
+        """Serialises CTPP negotiation (open vs. video start)."""
+        return self._ctpp_lock
+
+    @property
+    def ctpp_init_ts(self) -> int:
+        """init_ts of the last CTPP init on the shared connection."""
+        return self._ctpp_init_ts
+
+    async def async_start_shared(self) -> None:
+        """Connect + authenticate the shared client and open/init CTPP once.
+
+        Idempotent-ish: safe to call at setup. Also (re)starts the doorbell
+        VIP listener via the events manager once CTPP is up.
+        """
+        await self._connect_shared()
+
+    async def _connect_shared(self) -> None:
+        """(Re)establish the shared client, open CTPP+CSPB, run init."""
+        client = SharedIconaClient(self.host, self.port)
+        await client.connect()
+        try:
+            await self._authenticate(client)
+        except Exception:
+            with contextlib.suppress(Exception):
+                await client.disconnect()
+            raise
+
+        self._shared_client = client
+        client.set_disconnect_callback(self._on_shared_disconnect)
+
+        # Open + initialise the single CTPP registration. Guarded by the CTPP
+        # lock so it can't race a video start.
+        async with self._ctpp_lock:
+            await self._open_ctpp_channels(client)
+
+        # Bring the doorbell listener up on the freshly opened CTPP.
+        if self.events_manager is not None:
+            with contextlib.suppress(Exception):
+                await self.events_manager.async_attach_local()
+
+    async def _authenticate(self, client: SharedIconaClient) -> None:
+        """Authenticate the shared client via an inline UAUT access request."""
+        ua = await client.open_channel("UAUT", ChannelType.UAUT)
+        resp = await client.send_json(
+            ua,
+            {
+                "message": "access",
+                "user-token": self.token,
+                "message-type": "request",
+                "message-id": 2,
+            },
+        )
+        if resp.get("response-code") != 200:
+            raise ConfigEntryAuthFailed(
+                f"Shared client auth failed (code {resp.get('response-code')})"
+            )
+
+    async def _open_ctpp_channels(self, client: SharedIconaClient) -> int:
+        """Open CTPP + CSPB and run the full CTPP init handshake.
+
+        Stores the init_ts so the VIP listener derives matching ACK timestamps.
+        Returns the init_ts used.
+        """
+        vip = self.vip_config or {}
+        apt = vip.get("apt-address", "")
+        sub = vip.get("apt-subaddress", 0)
+        our_addr = f"{apt}{sub}"
+        ctpp = await client.open_channel("CTPP", ChannelType.CTPP, extra_data=our_addr)
+        await client.open_channel("CSPB", ChannelType.CSPB)
+        ts = int(time.time()) & 0xFFFFFFFF
+        await ctpp_init_sequence(client, ctpp, apt, sub, our_addr, ts)
+        self._ctpp_init_ts = ts
+        _LOGGER.info("Shared CTPP opened for VIP events (%s, ts=0x%08X)", our_addr, ts)
+        return ts
+
+    def _on_shared_disconnect(self) -> None:
+        """Called by the shared client when its TCP connection drops.
+
+        Schedules a reconnect: re-auth → re-open CTPP → restart listener.
+        """
+        if self._shared_client is None:
+            return
+        _LOGGER.debug("Shared connection lost — scheduling reconnect")
+        self.hass.async_create_task(self._reconnect_shared())
+
+    async def _reconnect_shared(self) -> None:
+        """Tear down and re-establish the shared connection + CTPP + listener."""
+        if self._reconnecting:
+            return
+        self._reconnecting = True
+        try:
+            # Stop the video session first — it holds a reference to the dead
+            # client and would otherwise hang waiting on the dead socket.
+            with contextlib.suppress(Exception):
+                await self.stream.async_stop_for_reconnect()
+            # Detach the listener (leaves nothing on the dead client).
+            if self.events_manager is not None:
+                with contextlib.suppress(Exception):
+                    await self.events_manager.async_detach_local()
+
+            old = self._shared_client
+            self._shared_client = None
+            if old is not None:
+                with contextlib.suppress(Exception):
+                    await old.disconnect()
+
+            # Retry connect a few times — the device may still be waking up.
+            for attempt in range(4):
+                try:
+                    await self._connect_shared()
+                    _LOGGER.info("Shared connection re-established")
+                    return
+                except Exception as err:  # noqa: BLE001
+                    if attempt >= 3:
+                        _LOGGER.warning("Shared reconnect failed: %s", err)
+                        return
+                    await asyncio.sleep(2)
+        finally:
+            self._reconnecting = False
+
+    async def async_stop_shared(self) -> None:
+        """Disconnect the shared client (on unload)."""
+        if self.events_manager is not None:
+            with contextlib.suppress(Exception):
+                await self.events_manager.async_detach_local()
+        client = self._shared_client
+        self._shared_client = None
+        if client is not None:
+            with contextlib.suppress(Exception):
+                await client.disconnect()
 
     async def async_open_door(self, door_name: str) -> None:
         """Open a specific door."""
