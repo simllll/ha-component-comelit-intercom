@@ -152,6 +152,7 @@ class ComelitEventsManager:
     def _handle_ring(self, payload: dict[str, Any]) -> None:
         """Common entry point for both local and cloud rings."""
         payload.setdefault("source", self._source)
+        payload.setdefault("event_type", "ring")
         payload["doorbell"] = self._doorbell_name(payload.get("caller"))
         _LOGGER.info(
             "Doorbell ring (source=%s, doorbell=%s)",

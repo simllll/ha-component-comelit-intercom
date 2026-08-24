@@ -239,6 +239,7 @@ class ComelitPushManager:
 
             _LOGGER.info("Doorbell ring received (call_id=%s)", payload.get("call_id"))
             payload["source"] = "cloud"
+            payload.setdefault("event_type", "ring")
             if self._on_ring is not None:
                 self._on_ring(payload)
             else:

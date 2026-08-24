@@ -330,17 +330,23 @@ class ComelitLocalEventListener:
                     await self._send_ack_pair()
                 except Exception:  # noqa: BLE001
                     pass
-                self._fire_ring(body)
+                self._fire_event(body, "ring")
+            elif prefix == _PFX_CALL and action == 0x0000:
+                # 0x1840/0x0000 tail = call ended without answer → missed call.
+                self._fire_event(body, "missed_call")
 
-    def _fire_ring(self, body: bytes) -> None:
+    def _fire_event(self, body: bytes, event_type: str) -> None:
         now = time.monotonic()
         caller = _extract_caller(body, self._apt) or ""
-        # de-dup rapid retransmits of the same ring
-        if now - self._last_fire.get(caller, 0) < 8:
+        # de-dup rapid retransmits of the same event
+        key = f"{event_type}:{caller}"
+        if now - self._last_fire.get(key, 0) < 8:
             return
-        self._last_fire[caller] = now
-        _LOGGER.info("Local ring from %s", caller)
+        self._last_fire[key] = now
+        _LOGGER.info("Local %s from %s", event_type, caller)
         try:
-            self._on_ring({"caller": caller, "source": "local"})
+            self._on_ring(
+                {"caller": caller, "source": "local", "event_type": event_type}
+            )
         except Exception:  # noqa: BLE001
-            _LOGGER.exception("Error in local ring callback")
+            _LOGGER.exception("Error in local event callback")
