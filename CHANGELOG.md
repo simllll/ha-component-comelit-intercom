@@ -4,6 +4,14 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.5.0](https://github.com/simllll/hass-comelit-icona/compare/v1.4.0...v1.5.0) (2026-08-24)
+
+
+### Features
+
+* add reauth and reconfigure flows ([#6](https://github.com/simllll/hass-comelit-icona/issues/6)) ([f5dc4b2](https://github.com/simllll/hass-comelit-icona/commit/f5dc4b2dcc496ba63c905220fb42638dd97c2ed5))
+* live video stream + reliable snapshots ([#8](https://github.com/simllll/hass-comelit-icona/issues/8)) ([3a54a81](https://github.com/simllll/hass-comelit-icona/commit/3a54a8172db9071c7f6634a31bb9805abde90390))
+
 ## [1.4.0](https://github.com/simllll/hass-comelit-icona/compare/v1.3.2...v1.4.0) (2026-08-24)
 
 
