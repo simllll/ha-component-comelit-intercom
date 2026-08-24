@@ -56,8 +56,11 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def device_info(self) -> DeviceInfo:
         """Shared device info, enriched with server-info when available."""
         model_code = self.server_info.get("model")
-        # Map known internal model codes to friendlier product names.
-        model = {"MnWi": "6742W Mini ViP"}.get(model_code, model_code or "ICONA Bridge")
+        # Map known internal server-info model codes to friendlier product names.
+        model = {
+            "MnWi": "6742W Mini ViP",
+            "MSVF": "6741W Mini ViP",
+        }.get(model_code, model_code or "ICONA Bridge")
         name = f"Comelit {model}" if model_code else "Comelit Intercom"
         return DeviceInfo(
             identifiers={(DOMAIN, self.entry.unique_id)},
