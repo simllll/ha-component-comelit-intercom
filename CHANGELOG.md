@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.8.1](https://github.com/simllll/hass-comelit-icona/compare/v1.8.0...v1.8.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* create the Floor call doorbell dynamically on first ring ([#30](https://github.com/simllll/hass-comelit-icona/issues/30)) ([619d850](https://github.com/simllll/hass-comelit-icona/commit/619d8509f9dd044d7322bedb7d69d534fb11ac22))
+
 ## [1.8.0](https://github.com/simllll/hass-comelit-icona/compare/v1.7.2...v1.8.0) (2026-08-25)
 
 
