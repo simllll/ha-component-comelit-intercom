@@ -99,11 +99,8 @@ def _async_register_answer_service(hass: HomeAssistant) -> None:
             coordinator = getattr(entry, "runtime_data", None)
             if coordinator is None:
                 continue
-            target = entrance or coordinator.stream.default_entrance()
-            if not target:
-                _LOGGER.warning("answer: no entrance configured")
-                continue
-            await coordinator.stream.async_answer(target)
+            # async_answer resolves to the ringing entrance when none is given.
+            await coordinator.stream.async_answer(entrance)
             return
 
     hass.services.async_register(DOMAIN, SERVICE_ANSWER, handle_answer)

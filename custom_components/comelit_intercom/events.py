@@ -95,9 +95,12 @@ class ComelitEventsManager:
         # listener is paused, but that is expected and must NOT trigger the
         # cloud fallback.
         self._paused_for_video = False
-        # Monotonic time of the last real ring — used to decide whether a
-        # camera open should answer the active call (two-way) vs a plain view.
+        # Last real ring: monotonic time + the caller that rang. Used to decide
+        # whether a camera open should answer the active call (two-way) vs a
+        # plain view, and — with multiple video doorbells — which entrance's
+        # camera should answer (only the one that actually rang).
         self._last_ring_mono = 0.0
+        self._last_ring_caller: str | None = None
 
     def ring_active(self, window: float = 30.0) -> bool:
         """True if a doorbell ring arrived within the last `window` seconds.
@@ -106,6 +109,20 @@ class ComelitEventsManager:
         for ~30 s, so this bounds when answering (joining it) is possible.
         """
         return 0.0 < (time.monotonic() - self._last_ring_mono) <= window
+
+    def ring_active_for(self, entrance: str, window: float = 30.0) -> bool:
+        """True if a ring from *entrance* is active.
+
+        With several video doorbells, only the camera whose entrance actually
+        rang should answer; the others stay plain views.
+        """
+        return self.ring_active(window) and address_matches(
+            self._last_ring_caller, entrance
+        )
+
+    def ring_caller(self, window: float = 30.0) -> str | None:
+        """The caller address of the active ring (None if no ring is active)."""
+        return self._last_ring_caller if self.ring_active(window) else None
 
     @property
     def source(self) -> str:
@@ -264,6 +281,7 @@ class ComelitEventsManager:
         payload.setdefault("event_type", "ring")
         if payload.get("event_type") == "ring":
             self._last_ring_mono = time.monotonic()
+            self._last_ring_caller = payload.get("caller")
         payload["doorbell"] = self._doorbell_name(payload.get("caller"))
         _LOGGER.info(
             "Doorbell ring (source=%s, doorbell=%s)",

@@ -85,30 +85,54 @@ class ComelitStreamManager:
     def _touch(self) -> None:
         self._last_use = self.hass.loop.time()
 
-    def _ring_active(self) -> bool:
-        """True if a ring is live, so opening the view should answer (two-way)."""
+    def _entrances(self) -> list[str]:
+        """All configured entrance panel addresses."""
+        books = (self._vip() or {}).get("user-parameters", {})
+        return [
+            e["apt-address"]
+            for e in books.get("entrance-address-book", [])
+            if e.get("apt-address")
+        ]
+
+    def _ring_active_for(self, entrance: str) -> bool:
+        """True if a ring from *this* entrance is live (→ answer, not view).
+
+        Per-entrance so that, with several video doorbells, only the camera
+        that actually rang answers; the others open as plain views.
+        """
         events = self._coordinator.events_manager
-        return events is not None and events.ring_active()
+        return events is not None and events.ring_active_for(entrance)
+
+    def _ringing_entrance(self) -> str | None:
+        """The configured entrance whose ring is currently active, if any."""
+        events = self._coordinator.events_manager
+        if events is None:
+            return None
+        for ent in self._entrances():
+            if events.ring_active_for(ent):
+                return ent
+        return None
 
     def default_entrance(self) -> str | None:
         """First entrance panel address from the config (for the answer service)."""
-        books = (self._vip() or {}).get("user-parameters", {})
-        for ent in books.get("entrance-address-book", []):
-            addr = ent.get("apt-address")
-            if addr:
-                return addr
-        return None
+        entrances = self._entrances()
+        return entrances[0] if entrances else None
 
-    async def async_answer(self, entrance: str) -> bool:
-        """Explicitly answer the active ring to *entrance* (two-way audio).
+    async def async_answer(self, entrance: str | None = None) -> bool:
+        """Explicitly answer the active ring (two-way audio).
 
-        Used by the answer service. Returns True if a session was (re)started
-        in answer mode. Works best while a ring is active; if none is, the
-        device has no call to join and the answer will simply not carry audio.
+        Used by the answer service. If *entrance* is omitted, targets the
+        entrance that actually rang (so the right camera shows it), falling
+        back to the first configured entrance. Works best while a ring is
+        active; if none is, the device has no call to join.
         """
+        target = entrance or self._ringing_entrance() or self.default_entrance()
+        if not target:
+            _LOGGER.warning("answer: no entrance configured")
+            return False
         async with self._lock:
             try:
-                await self._ensure(entrance, answer_mode=True)
+                await self._ensure(target, answer_mode=True)
             except Exception as err:  # noqa: BLE001
                 _LOGGER.error("Failed to answer call: %s", err)
                 await self._stop_session("answer failure")
@@ -120,9 +144,11 @@ class ComelitStreamManager:
         """Ensure the shared call is running and return the RTSP URL."""
         async with self._lock:
             try:
-                # Opening the view while a ring is live answers it (two-way);
-                # otherwise it's a plain outbound view.
-                await self._ensure(entrance, answer_mode=self._ring_active())
+                # Opening the view while THIS entrance's ring is live answers
+                # it (two-way); otherwise it's a plain outbound view. Per
+                # entrance, so with multiple doorbells only the one that rang
+                # answers.
+                await self._ensure(entrance, answer_mode=self._ring_active_for(entrance))
             except Exception as err:  # noqa: BLE001
                 _LOGGER.error("Failed to start live video call: %s", err)
                 await self._stop_session("start failure")
