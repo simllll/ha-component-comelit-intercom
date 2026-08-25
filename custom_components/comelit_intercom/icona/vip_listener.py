@@ -130,6 +130,12 @@ class VipEventListener:
         self._running = False
         self._last_fired: dict[str, float] = {}
         self._dedup_window = 8.0
+        # A real "missed call" only follows an actual ring. 0x1840/0x0000 also
+        # arrives as a video-call teardown tail and at CTPP init after a reboot;
+        # those are NOT missed calls. Only emit missed_call if a ring preceded
+        # it within this window.
+        self._last_ring_mono = 0.0
+        self._missed_window = 45.0
         self.restart_count = 0
 
     @property
@@ -227,12 +233,21 @@ class VipEventListener:
         ):
             with contextlib.suppress(Exception):
                 await self._send_renewal_ack()
+            self._last_ring_mono = time.monotonic()
             self._fire(addresses, "ring")
             return
 
-        # Missed call: 0x1840/0x0000.
+        # Missed call: 0x1840/0x0000 — but ONLY when it follows a real ring.
+        # The same frame is also emitted as a video-call teardown tail and at
+        # CTPP init after a reboot; those must not fire a missed call.
         if prefix == PREFIX_VIDEO_EVENT and action == ACTION_IDLE:
-            self._fire(addresses, "missed_call")
+            if 0 < time.monotonic() - self._last_ring_mono <= self._missed_window:
+                self._last_ring_mono = 0.0
+                self._fire(addresses, "missed_call")
+            elif is_verbose_logging():
+                _LOGGER.debug(
+                    "Ignoring 0x1840/0x0000 (no preceding ring — video/CTPP tail)"
+                )
             return
 
     async def _send_renewal_ack(self) -> None:
