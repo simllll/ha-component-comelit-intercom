@@ -49,15 +49,19 @@ async def async_setup_entry(
             )
         )
 
-    # The floor / "Etagen" call (the apartment's own door station) — always present.
-    entities.append(
-        ComelitDoorbellEvent(
-            coordinator,
-            key="floor",
-            name="Floor call",
-            matcher=lambda c, a=apt: address_matches(c, a),
+    # The floor / "Etagen" call (the apartment's own internal door station) only
+    # exists in apartment-block installations. Single-house / "kit" mode uses
+    # S-prefixed ViP addresses (e.g. SB000001) and has no floor call, so the
+    # entity would sit at "unknown" forever — skip it there.
+    if apt and not apt.upper().startswith("S"):
+        entities.append(
+            ComelitDoorbellEvent(
+                coordinator,
+                key="floor",
+                name="Floor call",
+                matcher=lambda c, a=apt: address_matches(c, a),
+            )
         )
-    )
 
     async_add_entities(entities)
 
