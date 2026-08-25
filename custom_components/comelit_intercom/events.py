@@ -238,6 +238,14 @@ class ComelitEventsManager:
 
     # --- ring handling ---------------------------------------------------
     @callback
+    def handle_ring(self, payload: dict[str, Any]) -> None:
+        """Public ring entry point.
+
+        Used by the video session to forward rings seen on CTPP while the
+        doorbell listener is paused for a call (see video_stream).
+        """
+        self._handle_ring(payload)
+
     def _handle_ring(self, payload: dict[str, Any]) -> None:
         """Common entry point for both local and cloud rings."""
         payload.setdefault("source", self._source)
