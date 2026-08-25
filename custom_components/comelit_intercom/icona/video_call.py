@@ -738,6 +738,11 @@ class VideoCallSession:
         caller = _extract_caller(
             parsed.get("addresses", []), self._config.apt_address
         )
+        # 6741W floor call carries the entrance address; the "FF" origin tag is
+        # the only discriminator — report our apartment address so it routes to
+        # the Floor call entity (issue #45), matching the VIP listener.
+        if parsed.get("call_tag") == b"FF" and self._config.apt_address:
+            caller = self._config.apt_address
         now = time.monotonic()
         if now - self._last_ring_fired.get(caller, 0.0) < self._ring_dedup_window:
             return

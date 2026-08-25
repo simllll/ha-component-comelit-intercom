@@ -115,6 +115,15 @@ The **caller** VIP address in the frame identifies the source: an entrance panel
 (e.g. `00000100`) vs the apartment's own floor/"Etagen" station (`apt-address` +
 sub, e.g. `00000B060`).
 
+**Floor-call origin tag (6741W).** On kit/single-house firmware the floor-door
+ring carries the **entrance panel's** address as the caller — byte-identical to a
+building-door ring — so the address alone cannot distinguish them. The only
+stable discriminator is a **two-ASCII-byte tag immediately before the
+`FF FF FF FF` marker** in the `0x18C0` frame: `PP` = entrance panel, `FF` = floor
+door ("fuoriporta"). `parse_ctpp_message` exposes this as `call_tag`; when it is
+`FF` the integration reports the caller as the apartment's own address so the
+floor-call routing / "Floor call" entity fires (issue #45).
+
 **Addressing differs by system mode.** Apartment-block systems (e.g. 6742W,
 `model: MnWi`) use plain numeric addresses (`00000100`). **Kit / single-house
 mode** (e.g. 6741W, `model: MSVF`) uses an **`S` mode prefix** in the
