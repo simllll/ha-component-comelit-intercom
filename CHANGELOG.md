@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.9.2](https://github.com/simllll/hass-comelit-icona/compare/v1.9.1...v1.9.2) (2026-08-25)
+
+
+### Bug Fixes
+
+* advertise the PCMA audio track in the RTSP SDP ([#36](https://github.com/simllll/hass-comelit-icona/issues/36)) ([beacd56](https://github.com/simllll/hass-comelit-icona/commit/beacd56617131949fde46ea05e14803dbe9338b7))
+
 ## [1.9.1](https://github.com/simllll/hass-comelit-icona/compare/v1.9.0...v1.9.1) (2026-08-25)
 
 
