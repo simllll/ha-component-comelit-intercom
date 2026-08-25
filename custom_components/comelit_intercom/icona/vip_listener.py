@@ -88,6 +88,15 @@ def parse_ctpp_message(data: bytes) -> dict | None:
     for m in _ADDR_RE.finditer(data):
         addresses.append(m.group(0).decode("ascii", errors="replace"))
     result["addresses"] = addresses
+
+    # Call-origin tag: the two ASCII bytes immediately before the 0xFFFFFFFF
+    # marker. On the 6741W the floor-call ring carries the entrance panel's
+    # address as the caller — byte-identical to a building-door ring — so the
+    # address can't distinguish them. This tag is the only stable
+    # discriminator: "PP" = entrance panel, "FF" = floor door ("fuoriporta").
+    # See issue #45.
+    marker = data.find(b"\xff\xff\xff\xff")
+    result["call_tag"] = data[marker - 2 : marker] if marker >= 2 else None
     return result
 
 
@@ -234,7 +243,7 @@ class VipEventListener:
             with contextlib.suppress(Exception):
                 await self._send_renewal_ack()
             self._last_ring_mono = time.monotonic()
-            self._fire(addresses, "ring")
+            self._fire(addresses, "ring", msg.get("call_tag"))
             return
 
         # Missed call: 0x1840/0x0000 — but ONLY when it follows a real ring.
@@ -268,9 +277,17 @@ class VipEventListener:
         except Exception:
             _LOGGER.warning("VIP: failed to send renewal ACK", exc_info=True)
 
-    def _fire(self, addresses: list[str], event_type: str) -> None:
+    def _fire(
+        self, addresses: list[str], event_type: str, call_tag: bytes | None = None
+    ) -> None:
         now = time.time()
         caller = _extract_caller(addresses, self._apt)
+        # 6741W floor call: the ring carries the entrance panel's address, so
+        # the only origin signal is the tag ("FF" = floor door). Report our own
+        # apartment address as the caller so address_matches() routes it to the
+        # "Floor call" entity instead of the entrance doorbell (issue #45).
+        if call_tag == b"FF" and self._apt:
+            caller = self._apt
         key = f"{event_type}:{caller}"
         if now - self._last_fired.get(key, 0.0) < self._dedup_window:
             return
