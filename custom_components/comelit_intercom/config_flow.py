@@ -20,6 +20,7 @@ from .const import (
     CONF_ENABLE_NOTIFICATIONS,
     CONF_PUSH_TOKEN,
     CONF_USER_MATCH,
+    CONF_VERBOSE_LOGGING,
     CONF_WEB_PASSWORD,
     DEFAULT_PORT,
     DEFAULT_WEB_PASSWORD,
@@ -405,6 +406,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     CONF_PUSH_TOKEN,
                     description={"suggested_value": options.get(CONF_PUSH_TOKEN, "")},
                 ): str,
+                vol.Optional(
+                    CONF_VERBOSE_LOGGING,
+                    default=options.get(CONF_VERBOSE_LOGGING, False),
+                ): bool,
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

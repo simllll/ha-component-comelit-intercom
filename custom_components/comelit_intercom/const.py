@@ -34,6 +34,8 @@ CONF_ENABLE_NOTIFICATIONS = "enable_notifications"
 # Optional: enroll the push token under a *different* ICONA identity token than
 # the one used for control, so a paired phone keeps its own push registration.
 CONF_PUSH_TOKEN = "push_token"
+# Enable detailed protocol/video/audio debug logging (for bug reports).
+CONF_VERBOSE_LOGGING = "verbose_logging"
 
 FCM_PROJECT_ID = "friend-home-55eb5"
 FCM_APP_ID = "1:140273510303:android:ecb227a626746c69"
