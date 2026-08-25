@@ -39,7 +39,7 @@ import socket
 import struct
 import time
 
-from .const import is_verbose_logging
+from .const import is_audio_enabled, is_verbose_logging
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -544,7 +544,7 @@ class LocalRtspServer:
         pps_b64 = base64.b64encode(self._latest_pps).decode()
         # profile-level-id = first 3 bytes of SPS (profile_idc, constraints, level_idc)
         profile_level_id = self._latest_sps[1:4].hex()
-        return (
+        sdp = (
             "v=0\r\n"
             f"o=- 0 0 IN IP4 {self._bind_host}\r\n"
             "s=Comelit Intercom\r\n"
@@ -556,18 +556,23 @@ class LocalRtspServer:
             f"profile-level-id={profile_level_id};"
             f"sprop-parameter-sets={sps_b64},{pps_b64}\r\n"
             "a=control:video\r\n"
-            # Audio: G.711 PCMA (PT8, 8 kHz). Static payload type, but an
-            # explicit rtpmap keeps go2rtc happy. Without this m-line no client
-            # (go2rtc, FFmpeg) ever issues SETUP audio, so audio_ch stays None
-            # and the entrance audio broadcast has no channel to write to.
-            # HLS can't mux G.711 and silently drops the track (video keeps
-            # working); go2rtc carries PCMA to the browser over WebRTC, which
-            # is what enables the two-way/unmute control.
-            "m=audio 0 RTP/AVP 8\r\n"
-            "c=IN IP4 0.0.0.0\r\n"
-            "a=rtpmap:8 PCMA/8000\r\n"
-            "a=control:audio\r\n"
         )
+        # Audio: G.711 PCMA (PT8, 8 kHz). Static payload type, but an explicit
+        # rtpmap keeps go2rtc happy. Without this m-line no client (go2rtc,
+        # FFmpeg) ever issues SETUP audio, so audio_ch stays None and the
+        # entrance audio broadcast has no channel to write to. HLS can't mux
+        # G.711 and silently drops the track (video keeps working); go2rtc
+        # carries PCMA to the browser over WebRTC, which is what enables the
+        # two-way/unmute control. Gated by the "enable_audio" option so users
+        # who hit HLS/video trouble can drop the track entirely.
+        if is_audio_enabled():
+            sdp += (
+                "m=audio 0 RTP/AVP 8\r\n"
+                "c=IN IP4 0.0.0.0\r\n"
+                "a=rtpmap:8 PCMA/8000\r\n"
+                "a=control:audio\r\n"
+            )
+        return sdp
 
     async def _wait_for_teardown(self, reader: asyncio.StreamReader) -> None:
         """Hold client connection open until TEARDOWN or disconnect."""

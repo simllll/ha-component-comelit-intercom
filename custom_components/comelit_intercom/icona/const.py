@@ -8,6 +8,7 @@ CONF_HTTP_PORT = "http_port"
 CONF_VIDEO_AUTO_RECONNECT = "video_auto_reconnect"
 CONF_ENABLE_NOTIFICATIONS = "enable_notifications"
 CONF_VERBOSE_LOGGING = "verbose_logging"
+CONF_ENABLE_AUDIO = "enable_audio"
 
 _verbose_logging: bool = False
 
@@ -21,6 +22,20 @@ def set_verbose_logging(enabled: bool) -> None:
     """Set the verbose logging flag (called on setup and options reload)."""
     global _verbose_logging
     _verbose_logging = enabled
+
+
+_audio_enabled: bool = True
+
+
+def is_audio_enabled() -> bool:
+    """Return True when the RTSP stream should advertise/carry the audio track."""
+    return _audio_enabled
+
+
+def set_audio_enabled(enabled: bool) -> None:
+    """Set the audio-stream flag (called on setup and options reload)."""
+    global _audio_enabled
+    _audio_enabled = enabled
 
 
 DEFAULT_PORT = 64100

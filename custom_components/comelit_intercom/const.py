@@ -36,6 +36,9 @@ CONF_ENABLE_NOTIFICATIONS = "enable_notifications"
 CONF_PUSH_TOKEN = "push_token"
 # Enable detailed protocol/video/audio debug logging (for bug reports).
 CONF_VERBOSE_LOGGING = "verbose_logging"
+# Advertise/carry the G.711 PCMA audio track in the RTSP stream. On by
+# default; turn off if the audio track upsets the HLS/video path.
+CONF_ENABLE_AUDIO = "enable_audio"
 
 FCM_PROJECT_ID = "friend-home-55eb5"
 FCM_APP_ID = "1:140273510303:android:ecb227a626746c69"

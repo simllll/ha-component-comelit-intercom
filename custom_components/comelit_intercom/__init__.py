@@ -8,10 +8,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_ENABLE_NOTIFICATIONS, CONF_VERBOSE_LOGGING, DOMAIN
+from .const import (
+    CONF_ENABLE_AUDIO,
+    CONF_ENABLE_NOTIFICATIONS,
+    CONF_VERBOSE_LOGGING,
+    DOMAIN,
+)
 from .coordinator import ComelitDataUpdateCoordinator
 from .events import ComelitEventsManager
-from .icona.const import set_verbose_logging
+from .icona.const import set_audio_enabled, set_verbose_logging
 from .test_service import SERVICE_TEST_CONNECTION, async_setup_test_service
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,14 +34,17 @@ type ComelitConfigEntry = ConfigEntry[ComelitDataUpdateCoordinator]
 
 
 async def _async_update_options(hass: HomeAssistant, entry: ComelitConfigEntry) -> None:
-    """Apply options that can change at runtime (verbose logging)."""
+    """Apply options that can change at runtime (verbose logging, audio)."""
     set_verbose_logging(entry.options.get(CONF_VERBOSE_LOGGING, False))
+    set_audio_enabled(entry.options.get(CONF_ENABLE_AUDIO, True))
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ComelitConfigEntry) -> bool:
     """Set up Comelit from a config entry."""
-    # Apply verbose (protocol/video/audio) debug logging per the options.
+    # Apply verbose (protocol/video/audio) debug logging + audio-stream
+    # toggle per the options.
     set_verbose_logging(entry.options.get(CONF_VERBOSE_LOGGING, False))
+    set_audio_enabled(entry.options.get(CONF_ENABLE_AUDIO, True))
     entry.async_on_unload(entry.add_update_listener(_async_update_options))
 
     coordinator = ComelitDataUpdateCoordinator(hass, entry)
