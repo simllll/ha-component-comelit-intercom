@@ -16,7 +16,6 @@ from .ctpp import ctpp_init_sequence
 from .exceptions import VideoCallError
 from .models import DeviceConfig
 from .protocol import (
-    encode_answer_peer,
     encode_audio_tx_enable,
     encode_call_ack,
     encode_call_init,
@@ -97,9 +96,12 @@ class VideoCallSession:
         self._on_ring = on_ring
         self._last_ring_fired: dict[str, float] = {}
         self._ring_dedup_window = 8.0
-        # Talk-back (TX audio) state. The TX loop pulls browser-mic PCMA from
-        # the RTSP server's backchannel queue, sends the 0x0070 enable once,
-        # then streams RTP to the device's own RTPC channel.
+        # Talk-back (TX audio) state. The TX loop streams RTP continuously on
+        # the device's own RTPC channel once the answer-peer (0x0070) is sent:
+        # real browser-mic PCMA from the RTSP backchannel queue when the user
+        # talks, G.711 silence otherwise. Continuous TX mirrors the app and is
+        # what makes some firmware (6741W) reciprocate and start sending RX
+        # audio — it won't stream audio to a purely passive viewer.
         self._tx_audio_task: asyncio.Task | None = None
         self._device_rtpc: Channel | None = None
         self._tx_our_addr: str = ""
@@ -107,7 +109,9 @@ class VideoCallSession:
         self._tx_seq: int = 0
         self._tx_ts: int = 0
         self._tx_ssrc: int = 0xF15DDA47
-        self._tx_enabled: bool = False
+        # Set once the 0x0070 answer-peer has been sent, so the TX loop doesn't
+        # stream audio before the device is in the "call answered" state.
+        self._answer_peer_sent: asyncio.Event = asyncio.Event()
         self._rtp_receiver: RtpReceiver | None = None
         self._rtsp_server: LocalRtspServer | None = rtsp_server
         self._timeout_task: asyncio.Task | None = None
@@ -501,7 +505,7 @@ class VideoCallSession:
             self._tx_entrance_addr = entrance_addr
             if self._rtsp_server is not None and not self._snapshot_only:
                 self._tx_audio_task = asyncio.create_task(
-                    self._tx_audio_loop(client, ctpp)
+                    self._tx_audio_loop(client)
                 )
 
             # Step 10d: Readiness gate — wait until the first real NAL has
@@ -797,52 +801,49 @@ class VideoCallSession:
         self._tx_ts = (self._tx_ts + len(payload)) & 0xFFFFFFFF
         return hdr + payload
 
-    async def _send_tx_enable(self, client: IconaBridgeClient, ctpp: Channel) -> None:
-        """Send the one-shot 0x1840/0x0070 talk-back enable on CTPP."""
-        async with self._ctpp_lock:
-            self._call_counter += _CTR_INCR_BYTE4
-            frame = encode_audio_tx_enable(
-                self._tx_our_addr, self._tx_entrance_addr, self._call_counter
-            )
-            await client.send_binary(ctpp, frame)
-        if is_verbose_logging():
-            _LOGGER.debug(
-                "TX audio: sent 0x0070 enable, counter=0x%08X", self._call_counter
-            )
+    async def _tx_audio_loop(self, client: IconaBridgeClient) -> None:
+        """Stream TX audio to the device on its own RTPC channel.
 
-    async def _tx_audio_loop(self, client: IconaBridgeClient, ctpp: Channel) -> None:
-        """Stream browser-mic PCMA to the device (talk-back).
-
-        Idle until the user opens the mic (first frame on the RTSP backchannel
-        queue); then send the 0x0070 enable once and forward each 20 ms A-law
-        frame as RTP on the device's own RTPC channel. Reframes to the device's
-        expected 160-byte (20 ms) frames. On a view-only session (no mic) this
-        never sends anything, so it doesn't perturb the RX path.
+        Runs continuously once the answer-peer (0x0070) is sent: forwards real
+        browser-mic PCMA from the RTSP backchannel queue when the user talks,
+        and G.711 A-law silence (0x55, as the app sends) otherwise, at a steady
+        20 ms cadence. The continuous stream is what makes firmware like the
+        6741W reciprocate and begin sending RX audio — it will not stream audio
+        to a purely passive viewer. Harmless on lenient firmware (6742W): the
+        app sends the same idle silence there too.
         """
         server = self._rtsp_server
         device_rtpc = self._device_rtpc
         if server is None or device_rtpc is None:
             return
+        # Wait until the call is "answered" (0x0070 sent) so the device is
+        # ready to accept audio; bail after a bounded wait if it never happens.
+        try:
+            await asyncio.wait_for(self._answer_peer_sent.wait(), timeout=15.0)
+        except TimeoutError:
+            if is_verbose_logging():
+                _LOGGER.debug("TX audio: answer-peer never sent — not streaming")
+            return
+        silence = b"\x55" * 160  # 20 ms G.711 A-law silence (matches the app)
         buffer = bytearray()
+        sent = 0
         try:
             while self._active:
-                try:
-                    payload = await asyncio.wait_for(
-                        server.backchannel_queue.get(), timeout=1.0
-                    )
-                except TimeoutError:
-                    continue
-                if not self._active:
-                    break
-                if not self._tx_enabled:
-                    await self._send_tx_enable(client, ctpp)
-                    self._tx_enabled = True
-                buffer += payload
-                while len(buffer) >= 160:
+                # Pull whatever mic audio is queued (non-blocking); pace to 20ms.
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    while True:
+                        buffer += server.backchannel_queue.get_nowait()
+                if len(buffer) >= 160:
                     frame = bytes(buffer[:160])
                     del buffer[:160]
-                    with contextlib.suppress(Exception):
-                        await client.send_binary(device_rtpc, self._build_tx_rtp(frame))
+                else:
+                    frame = silence
+                with contextlib.suppress(Exception):
+                    await client.send_binary(device_rtpc, self._build_tx_rtp(frame))
+                sent += 1
+                if is_verbose_logging() and sent == 1:
+                    _LOGGER.debug("TX audio: streaming started on device RTPC")
+                await asyncio.sleep(0.02)
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -935,7 +936,7 @@ class VideoCallSession:
         call_counter += _CTR_INCR_BYTE4
         await client.send_binary(
             ctpp,
-            encode_answer_peer(our_addr, entrance_addr, call_counter, renewal=True),
+            encode_audio_tx_enable(our_addr, entrance_addr, call_counter, renewal=True),
         )
         if is_verbose_logging():
             _LOGGER.debug("Re-establish: sent renewal peer/accept (0x1860/0x0070)")
@@ -994,12 +995,17 @@ class VideoCallSession:
         """
         async with self._ctpp_lock:
             self._call_counter += _CTR_INCR_BYTE4
+            # Byte-exact to the app's enable frame (encode_audio_tx_enable);
+            # encode_answer_peer is 2 bytes short of what the app sends, which
+            # some firmware (6741W) is stricter about.
             await client.send_binary(
                 ctpp,
-                encode_answer_peer(our_addr, entrance_addr, self._call_counter),
+                encode_audio_tx_enable(our_addr, entrance_addr, self._call_counter),
             )
+        # Let the TX loop start streaming now that the device is "answered".
+        self._answer_peer_sent.set()
         if is_verbose_logging():
-            _LOGGER.info("Answer peer/accept (0x70) sent — audio should start within ~400ms")
+            _LOGGER.info("Answer peer/accept (0x70) sent — starting TX audio")
 
     async def async_open_door_on_ctpp(
         self,

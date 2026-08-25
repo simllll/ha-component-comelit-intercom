@@ -516,24 +516,30 @@ def encode_audio_tx_enable(
     caller: str,
     entrance_addr: str,
     timestamp: int,
+    renewal: bool = False,
 ) -> bytes:
-    """Encode the talk-back enable message (0x1840 / action 0x0070).
+    """Encode the talk-back enable / peer message (action 0x0070).
 
-    Byte-exact to the app's outbound-call audio-enable frame
-    (PCAPdroid_25_Aug, t=6.146). The device begins accepting our TX audio RTP
-    (on its own RTPC channel) ~0.8 s after this frame:
+    Byte-exact to the app's audio-enable frames (PCAPdroid_25_Aug, both the
+    6742W and 6741W captures). After this the device accepts our TX audio RTP
+    on its own RTPC channel and (on stricter firmware) reciprocates:
 
-      [0x1840 LE16] [timestamp LE32] [inner_len BE16] [0x0070 BE16]
-      [caller\\0] [0x01 0x00 0x00 0x00]         <- inner payload (inner_len)
+      [prefix LE16] [timestamp LE32] [inner_len BE16] [0x0070 BE16]
+      [caller\\0] [flag 4 bytes]                 <- inner payload (inner_len)
       [0xFFFFFFFF] [caller\\0] [entrance\\0\\0]
 
+    Initial call: prefix=0x1840, flag=01 00 00 00
+    Renewal:      prefix=0x1860, flag=00 00 00 00
+
     inner_len counts only the inner payload (caller\\0 + 4 flag bytes), NOT the
-    action word — this differs from encode_answer_peer, which is why talk-back
-    uses its own encoder rather than reusing that one.
+    action word — this differs from encode_answer_peer (which is 2 bytes short
+    of what the app sends), so talk-back uses its own encoder.
     """
-    inner_payload = caller.encode("ascii") + b"\x00" + b"\x01\x00\x00\x00"
+    prefix = 0x1860 if renewal else 0x1840
+    flag = b"\x00\x00\x00\x00" if renewal else b"\x01\x00\x00\x00"
+    inner_payload = caller.encode("ascii") + b"\x00" + flag
     buf = bytearray()
-    buf += struct.pack("<H", 0x1840)
+    buf += struct.pack("<H", prefix)
     buf += struct.pack("<I", timestamp)
     buf += struct.pack(">H", len(inner_payload))
     buf += struct.pack(">H", ACTION_PEER)  # 0x0070
