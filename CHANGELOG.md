@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.7.1](https://github.com/simllll/hass-comelit-icona/compare/v1.7.0...v1.7.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* suppress false missed_call events and events-source flapping ([#24](https://github.com/simllll/hass-comelit-icona/issues/24)) ([305d6c9](https://github.com/simllll/hass-comelit-icona/commit/305d6c9d895aa0ce6f48b3de0b693f159c2e7656))
+
 ## [1.7.0](https://github.com/simllll/hass-comelit-icona/compare/v1.6.1...v1.7.0) (2026-08-24)
 
 
