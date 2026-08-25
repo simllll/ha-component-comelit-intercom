@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.9.3](https://github.com/simllll/hass-comelit-icona/compare/v1.9.2...v1.9.3) (2026-08-25)
+
+
+### Bug Fixes
+
+* run the audio feed loop so entrance PCMA reaches clients ([#38](https://github.com/simllll/hass-comelit-icona/issues/38)) ([3f0a2a2](https://github.com/simllll/hass-comelit-icona/commit/3f0a2a237b3a52116caa26dfc1502a4f68a0d300))
+
 ## [1.9.2](https://github.com/simllll/hass-comelit-icona/compare/v1.9.1...v1.9.2) (2026-08-25)
 
 
