@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -94,6 +95,17 @@ class ComelitEventsManager:
         # listener is paused, but that is expected and must NOT trigger the
         # cloud fallback.
         self._paused_for_video = False
+        # Monotonic time of the last real ring — used to decide whether a
+        # camera open should answer the active call (two-way) vs a plain view.
+        self._last_ring_mono = 0.0
+
+    def ring_active(self, window: float = 30.0) -> bool:
+        """True if a doorbell ring arrived within the last `window` seconds.
+
+        The entrance→apartment call the device sets up on a ring only lives
+        for ~30 s, so this bounds when answering (joining it) is possible.
+        """
+        return 0.0 < (time.monotonic() - self._last_ring_mono) <= window
 
     @property
     def source(self) -> str:
@@ -250,6 +262,8 @@ class ComelitEventsManager:
         """Common entry point for both local and cloud rings."""
         payload.setdefault("source", self._source)
         payload.setdefault("event_type", "ring")
+        if payload.get("event_type") == "ring":
+            self._last_ring_mono = time.monotonic()
         payload["doorbell"] = self._doorbell_name(payload.get("caller"))
         _LOGGER.info(
             "Doorbell ring (source=%s, doorbell=%s)",

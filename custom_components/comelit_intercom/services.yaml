@@ -1,3 +1,21 @@
+answer:
+  name: Answer ring (two-way audio)
+  description: >-
+    Answer the active doorbell ring — joins the incoming entrance→apartment
+    call so audio flows both ways. Only meaningful while a ring is active
+    (the device's call lives ~30 s). Opening the camera during a ring also
+    answers automatically; this service is the explicit trigger.
+  fields:
+    entrance:
+      name: Entrance address
+      description: >-
+        VIP address of the entrance panel to answer. Leave empty to use the
+        first configured entrance.
+      required: false
+      example: "SB100001"
+      selector:
+        text:
+
 test_connection:
   name: Test connection
   description: >-

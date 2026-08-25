@@ -75,6 +75,9 @@ class ComelitStreamManager:
         self._server: LocalRtspServer | None = None
         self._session: VideoCallSession | None = None
         self._entrance: str | None = None
+        # Whether the current session was started in answer mode (two-way,
+        # joining a live ring) vs a plain outbound view.
+        self._session_answer_mode = False
         self._lock = asyncio.Lock()
         self._idle_task: asyncio.Task | None = None
         self._last_use = 0.0
@@ -82,11 +85,44 @@ class ComelitStreamManager:
     def _touch(self) -> None:
         self._last_use = self.hass.loop.time()
 
+    def _ring_active(self) -> bool:
+        """True if a ring is live, so opening the view should answer (two-way)."""
+        events = self._coordinator.events_manager
+        return events is not None and events.ring_active()
+
+    def default_entrance(self) -> str | None:
+        """First entrance panel address from the config (for the answer service)."""
+        books = (self._vip() or {}).get("user-parameters", {})
+        for ent in books.get("entrance-address-book", []):
+            addr = ent.get("apt-address")
+            if addr:
+                return addr
+        return None
+
+    async def async_answer(self, entrance: str) -> bool:
+        """Explicitly answer the active ring to *entrance* (two-way audio).
+
+        Used by the answer service. Returns True if a session was (re)started
+        in answer mode. Works best while a ring is active; if none is, the
+        device has no call to join and the answer will simply not carry audio.
+        """
+        async with self._lock:
+            try:
+                await self._ensure(entrance, answer_mode=True)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.error("Failed to answer call: %s", err)
+                await self._stop_session("answer failure")
+                return False
+            self._touch()
+            return True
+
     async def async_stream_source(self, entrance: str) -> str | None:
         """Ensure the shared call is running and return the RTSP URL."""
         async with self._lock:
             try:
-                await self._ensure(entrance)
+                # Opening the view while a ring is live answers it (two-way);
+                # otherwise it's a plain outbound view.
+                await self._ensure(entrance, answer_mode=self._ring_active())
             except Exception as err:  # noqa: BLE001
                 _LOGGER.error("Failed to start live video call: %s", err)
                 await self._stop_session("start failure")
@@ -127,34 +163,43 @@ class ComelitStreamManager:
 
     # --- lifecycle -------------------------------------------------------
 
-    async def _ensure(self, entrance: str) -> None:
-        """Start the RTSP server + shared call to *entrance* if not already up."""
+    async def _ensure(self, entrance: str, answer_mode: bool = False) -> None:
+        """Start the RTSP server + shared call to *entrance* if not already up.
+
+        `answer_mode` upgrades a plain view into a two-way answer of the live
+        ring — only ever an upgrade, never a downgrade, so a passive snapshot
+        (answer_mode=False) never tears down an active answer call.
+        """
         if self._server is None:
             self._server = LocalRtspServer()
             await self._server.start()
             _LOGGER.debug("RTSP server started at %s", self._server.rtsp_url)
 
-        if (
+        need_new = (
             self._session is None
             or not self._session.active
             or self._entrance != entrance
-        ):
+        )
+        upgrade = answer_mode and not self._session_answer_mode
+        if need_new or upgrade:
             if self._session is not None:
                 _LOGGER.debug(
-                    "Recreating call (active=%s, entrance %s->%s)",
+                    "Recreating call (active=%s, entrance %s->%s, answer=%s->%s)",
                     self._session.active,
                     self._entrance,
                     entrance,
+                    self._session_answer_mode,
+                    answer_mode,
                 )
             # Don't resume the listener between stop and immediate restart —
             # _start_session pauses it again right away.
             await self._stop_session("restart", resume_listener=False)
-            await self._start_session(entrance)
+            await self._start_session(entrance, answer_mode=answer_mode)
             self._arm_idle_monitor()
         else:
             _LOGGER.debug("Reusing existing call to %s", entrance)
 
-    async def _start_session(self, entrance: str) -> None:
+    async def _start_session(self, entrance: str, answer_mode: bool = False) -> None:
         # Reuse the coordinator's single shared, authenticated ICONA client and
         # its already-open CTPP registration — never open a second connection
         # or a second CTPP (two CTPP registrations make the device drop video).
@@ -192,11 +237,17 @@ class ComelitStreamManager:
                 auto_timeout=False,
                 rtsp_server=self._server,
                 on_ring=on_ring,
+                answer_mode=answer_mode,
             )
             await self._session.start()
         self._server.mark_ready()
         self._entrance = entrance
-        _LOGGER.info("Live video call started to entrance %s", entrance)
+        self._session_answer_mode = answer_mode
+        _LOGGER.info(
+            "Live video call started to entrance %s (%s)",
+            entrance,
+            "answer/two-way" if answer_mode else "view",
+        )
 
     async def _stop_session(self, reason: str = "", resume_listener: bool = True) -> None:
         if self._session is not None:
@@ -205,6 +256,7 @@ class ComelitStreamManager:
                 await self._session.stop()
             self._session = None
         self._entrance = None
+        self._session_answer_mode = False
         if self._server is not None:
             self._server.mark_not_ready()
         # Hand the CTPP channel back to the doorbell listener. Skipped on

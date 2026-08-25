@@ -80,7 +80,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ComelitConfigEntry) -> b
     if not hass.services.has_service(DOMAIN, SERVICE_TEST_CONNECTION):
         await async_setup_test_service(hass)
 
+    # Register the "answer" service (two-way audio) once per HA instance.
+    if not hass.services.has_service(DOMAIN, SERVICE_ANSWER):
+        _async_register_answer_service(hass)
+
     return True
+
+
+SERVICE_ANSWER = "answer"
+
+
+def _async_register_answer_service(hass: HomeAssistant) -> None:
+    """Register comelit_intercom.answer — join the active ring for two-way audio."""
+
+    async def handle_answer(call) -> None:
+        entrance = call.data.get("entrance")
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            coordinator = getattr(entry, "runtime_data", None)
+            if coordinator is None:
+                continue
+            target = entrance or coordinator.stream.default_entrance()
+            if not target:
+                _LOGGER.warning("answer: no entrance configured")
+                continue
+            await coordinator.stream.async_answer(target)
+            return
+
+    hass.services.async_register(DOMAIN, SERVICE_ANSWER, handle_answer)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ComelitConfigEntry) -> bool:
