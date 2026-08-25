@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.10.1](https://github.com/simllll/hass-comelit-icona/compare/v1.10.0...v1.10.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* distinguish 6741W floor call via the origin tag (issue [#45](https://github.com/simllll/hass-comelit-icona/issues/45)) ([#46](https://github.com/simllll/hass-comelit-icona/issues/46)) ([f3fdf04](https://github.com/simllll/hass-comelit-icona/commit/f3fdf04c5e88f39a5e11b6d08cee061709b27681))
+
 ## [1.10.0](https://github.com/simllll/hass-comelit-icona/compare/v1.9.3...v1.10.0) (2026-08-25)
 
 
