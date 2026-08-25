@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.9.1](https://github.com/simllll/hass-comelit-icona/compare/v1.9.0...v1.9.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* read incoming audio RTP on the RTPC1 TCP channel ([#34](https://github.com/simllll/hass-comelit-icona/issues/34)) ([ab6f14f](https://github.com/simllll/hass-comelit-icona/commit/ab6f14f3a156bae54ebd544f90eb4fe768bc1d49))
+
 ## [1.9.0](https://github.com/simllll/hass-comelit-icona/compare/v1.8.1...v1.9.0) (2026-08-25)
 
 
