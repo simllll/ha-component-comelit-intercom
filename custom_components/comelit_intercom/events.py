@@ -87,6 +87,9 @@ class ComelitEventsManager:
         self._monitor: asyncio.Task | None = None
         self._source = SOURCE_NONE
         self._fcm_started = False
+        # Loop time when local last went down — debounces cloud fallback so a
+        # brief reconnect doesn't flap the source local↔cloud.
+        self._local_down_since: float | None = None
         # True while a video session has borrowed the CTPP channel — the
         # listener is paused, but that is expected and must NOT trigger the
         # cloud fallback.
@@ -199,12 +202,21 @@ class ComelitEventsManager:
 
         local_ok = self._local is not None and self._local.running
         if local_ok:
+            self._local_down_since = None
             new_source = SOURCE_LOCAL
             if self._fcm_started:
                 _LOGGER.info("Local events registered; stopping cloud fallback")
                 await self._fcm.async_stop()
                 self._fcm_started = False
         else:
+            # Debounce transient local outages (e.g. a shared-connection
+            # reconnect briefly detaches the listener) so the source doesn't
+            # flap local↔cloud. Only fall back to cloud after the grace period.
+            now = self.hass.loop.time()
+            if self._local_down_since is None:
+                self._local_down_since = now
+            if now - self._local_down_since < _LOCAL_GRACE_SECONDS:
+                return
             if not self._fcm_started and self._fcm is not None:
                 _LOGGER.info(
                     "Local events unavailable; starting cloud (FCM) fallback"
