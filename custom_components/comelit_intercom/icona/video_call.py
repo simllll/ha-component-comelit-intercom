@@ -26,6 +26,13 @@ from .protocol import (
 )
 from .rtp_receiver import RtpReceiver
 from .rtsp_server import LocalRtspServer
+from .vip_listener import (
+    ACTION_IN_ALERTING,
+    PREFIX_CALL_INIT,
+    PREFIX_VIP_EVENT,
+    _extract_caller,
+    parse_ctpp_message,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -74,6 +81,7 @@ class VideoCallSession:
         snapshot_only: bool = False,
         on_call_end: Callable[[], None] | None = None,
         on_timeout: Callable[[], None] | None = None,
+        on_ring: Callable[[dict], None] | None = None,
     ) -> None:
         self._client = client
         self._config = config
@@ -82,6 +90,12 @@ class VideoCallSession:
         self._external_rtsp = rtsp_server is not None
         self._on_call_end = on_call_end
         self._on_timeout = on_timeout
+        # Forwarded when a NEW ring is seen on CTPP during this call — the
+        # doorbell listener is paused while we hold CTPP, so rings arriving
+        # mid-call would otherwise be lost. Deduped per caller.
+        self._on_ring = on_ring
+        self._last_ring_fired: dict[str, float] = {}
+        self._ring_dedup_window = 8.0
         self._rtp_receiver: RtpReceiver | None = None
         self._rtsp_server: LocalRtspServer | None = rtsp_server
         self._timeout_task: asyncio.Task | None = None
@@ -626,6 +640,19 @@ class VideoCallSession:
                 msg_type = struct.unpack_from("<H", resp, 0)[0]
                 action = struct.unpack_from(">H", resp, 6)[0] if len(resp) >= 8 else 0
                 sub = struct.unpack_from(">H", resp, 8)[0] if len(resp) >= 10 else 0
+                # A NEW incoming ring during our active call — a re-press, or a
+                # ring from a different entrance — arrives as 0x18C0/0x0028 or
+                # 0x1860/0x0001 (IN_ALERTING). The doorbell listener is paused
+                # while we hold CTPP, so this is the only place mid-call rings
+                # can be observed; forward them so they still reach HA. This
+                # runs before the ACK handling below (0x1860 still gets its
+                # bare ACK; 0x18C0 is left as-is, and the per-caller dedup caps
+                # any device retransmit storm).
+                if self._on_ring is not None and (
+                    msg_type == PREFIX_CALL_INIT
+                    or (msg_type == PREFIX_VIP_EVENT and action == ACTION_IN_ALERTING)
+                ):
+                    self._forward_ring(resp)
                 if msg_type == 0x1840:
                     if action == 0x0003:
                         # CALL_END (sub=0x0000 = timer, sub=0x000E = door-open triggered)
@@ -698,6 +725,33 @@ class VideoCallSession:
             pass
         except Exception:
             _LOGGER.debug("CTPP monitor loop error", exc_info=True)
+
+    def _forward_ring(self, resp: bytes) -> None:
+        """Parse a ring frame seen mid-call and forward it to the events manager.
+
+        Deduped per caller (the device may retransmit an unACKed ring) so a
+        held ring produces at most one event per _ring_dedup_window.
+        """
+        parsed = parse_ctpp_message(resp)
+        if not parsed:
+            return
+        caller = _extract_caller(
+            parsed.get("addresses", []), self._config.apt_address
+        )
+        now = time.monotonic()
+        if now - self._last_ring_fired.get(caller, 0.0) < self._ring_dedup_window:
+            return
+        self._last_ring_fired[caller] = now
+        if is_verbose_logging():
+            _LOGGER.debug(
+                "CTPP monitor: ring from %s during active call — forwarding", caller
+            )
+        try:
+            self._on_ring(
+                {"caller": caller, "source": "local", "event_type": "ring"}
+            )
+        except Exception:
+            _LOGGER.exception("Error forwarding mid-call ring")
 
     async def _inline_reestablish(
         self,

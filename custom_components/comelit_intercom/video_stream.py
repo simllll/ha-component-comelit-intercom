@@ -180,8 +180,18 @@ class ComelitStreamManager:
                 caller_address=entrance,
             )
             self._server.reset()
+            # Forward any ring seen on CTPP during the call to the events
+            # manager — the doorbell listener is paused while video holds the
+            # channel, so this keeps mid-call rings from being lost.
+            on_ring = None
+            if events is not None:
+                on_ring = events.handle_ring
             self._session = VideoCallSession(
-                client, config, auto_timeout=False, rtsp_server=self._server
+                client,
+                config,
+                auto_timeout=False,
+                rtsp_server=self._server,
+                on_ring=on_ring,
             )
             await self._session.start()
         self._server.mark_ready()
