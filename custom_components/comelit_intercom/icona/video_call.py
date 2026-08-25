@@ -86,6 +86,7 @@ class VideoCallSession:
         self._rtsp_server: LocalRtspServer | None = rtsp_server
         self._timeout_task: asyncio.Task | None = None
         self._tcp_task: asyncio.Task | None = None
+        self._tcp_audio_task: asyncio.Task | None = None
         self._ctpp_task: asyncio.Task | None = None
         self._active = False
         # True when this session opened CTPP itself (notifications OFF).
@@ -445,6 +446,13 @@ class VideoCallSession:
             # wait are ACKed instead of lingering in the channel buffer.
             self._call_counter = call_counter
             self._tcp_task = asyncio.create_task(self._tcp_video_loop(client, rtpc2, receiver))
+            # Audio (G.711 PCMA, PT8) is multiplexed onto RTPC1 as its own TCP
+            # channel — 172-byte packets (12-byte RTP + 160-byte A-law frame).
+            # In UDP-media firmware audio shares the video socket and this loop
+            # simply sees no packets; on TCP-media firmware it is the only place
+            # the audio RTP is read.  receive_tcp_rtp PT-routes it to the audio
+            # queue, so the same loop handles both channels.
+            self._tcp_audio_task = asyncio.create_task(self._tcp_video_loop(client, rtpc1, receiver))
             self._ctpp_task = asyncio.create_task(
                 self._ctpp_monitor_loop(
                     client,
@@ -536,7 +544,7 @@ class VideoCallSession:
         """
         self._active = False
 
-        for task_attr in ("_timeout_task", "_tcp_task", "_ctpp_task"):
+        for task_attr in ("_timeout_task", "_tcp_task", "_tcp_audio_task", "_ctpp_task"):
             task = getattr(self, task_attr)
             setattr(self, task_attr, None)
             if task and not task.done():
