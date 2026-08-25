@@ -208,11 +208,15 @@ class LocalRtspServer:
         # Persistent feed tasks — run for the lifetime of the server.
         # Passthrough loop is lower latency; falls back to NAL-based
         # path automatically if rtp_queue is not fed.
-        # Audio is disabled — the device's answer sequence isn't producing
-        # PCMA in this deployment, and the silent keepalive at 1 Hz caused
-        # HLS/WebRTC stutters by ticking the 8 kHz audio clock 50× too slow.
+        # The audio feed loop emits real entrance PCMA during a call and
+        # 20 ms silence frames when idle.  The 20 ms cadence keeps the 8 kHz
+        # audio clock advancing in real time (160 samples / 20 ms) — the
+        # A/V-sync bootstrap in reset() relies on `_audio_ts` tracking wall
+        # clock this way.  (It used to tick at 1 Hz, which ran the clock 50×
+        # too slow and stuttered HLS/WebRTC; that is fixed below.)
         self._feed_tasks = [
             asyncio.create_task(self._video_rtp_passthrough_loop()),
+            asyncio.create_task(self._audio_feed_loop()),
             asyncio.create_task(self._rtcp_sr_loop()),
         ]
 
@@ -951,13 +955,17 @@ class LocalRtspServer:
     async def _audio_feed_loop(self) -> None:
         """Broadcast G.711 PCMA to all registered clients.
 
-        When no real audio is queued, sends silence every ~1s to keep
-        go2rtc and the stream worker alive between calls.
+        Real entrance audio is forwarded the moment it lands on the queue
+        (low latency). When the queue is idle, a 20 ms silence frame is sent
+        every 20 ms so the 8 kHz audio clock keeps advancing in real time
+        (160 samples / frame) and go2rtc/the stream worker stay alive
+        between calls. Clients that never SETUP audio (e.g. the HLS stream
+        worker) are skipped by _broadcast_rtp, so this is a no-op for them.
         """
         try:
             while self._running:
                 try:
-                    payload = await asyncio.wait_for(self.audio_queue.get(), timeout=1.0)
+                    payload = await asyncio.wait_for(self.audio_queue.get(), timeout=0.02)
                 except TimeoutError:
                     payload = _PCMA_SILENCE
 
