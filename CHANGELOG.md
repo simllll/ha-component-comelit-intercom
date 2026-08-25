@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.8.0](https://github.com/simllll/hass-comelit-icona/compare/v1.7.2...v1.8.0) (2026-08-25)
+
+
+### Features
+
+* receive entrance audio (RX) — accept the audio RTP request-id ([#28](https://github.com/simllll/hass-comelit-icona/issues/28)) ([7fefcdc](https://github.com/simllll/hass-comelit-icona/commit/7fefcdce9f51919cfeb68d4b149fda93614f1dd1))
+
 ## [1.7.2](https://github.com/simllll/hass-comelit-icona/compare/v1.7.1...v1.7.2) (2026-08-25)
 
 
