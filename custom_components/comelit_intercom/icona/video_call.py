@@ -18,6 +18,7 @@ from .models import DeviceConfig
 from .protocol import (
     encode_answer_peer,
     encode_call_ack,
+    encode_call_answer,
     encode_call_init,
     encode_call_response_ack,
     encode_door_open_during_video,
@@ -82,11 +83,18 @@ class VideoCallSession:
         on_call_end: Callable[[], None] | None = None,
         on_timeout: Callable[[], None] | None = None,
         on_ring: Callable[[dict], None] | None = None,
+        answer_mode: bool = False,
     ) -> None:
         self._client = client
         self._config = config
         self._auto_timeout = auto_timeout
         self._snapshot_only = snapshot_only
+        # Answer mode: instead of an outbound view call to the entrance
+        # (0x18C0/0x0028), join the incoming entrance→apartment ring
+        # (0x18C0/0x0040 addressed to the apartment master). This is the only
+        # context that carries two-way audio on some firmware (6741W). Only
+        # valid while a ring is actually active.
+        self._answer_mode = answer_mode
         self._external_rtsp = rtsp_server is not None
         self._on_call_end = on_call_end
         self._on_timeout = on_timeout
@@ -237,8 +245,13 @@ class VideoCallSession:
             # entrance_addr = the entrance panel address from entrance-address-book.
             # This appears as the SECOND address in call-phase messages (PCAP-verified).
             # For init-phase ACKs, we use apt_addr (without sub) as second address.
+            # Answer mode joins the entrance→apartment call: every CTPP frame
+            # is addressed to the apartment master (apt_addr), not the entrance.
+            # The media still carries the entrance's audio+video.
             entrance_addr = self._config.caller_address or our_addr
-            if not self._config.caller_address:
+            if self._answer_mode:
+                entrance_addr = apt_addr
+            if not self._answer_mode and not self._config.caller_address:
                 _LOGGER.warning(
                     "entrance-address-book is empty — using our_addr as entrance_addr. "
                     "Video call may fail if device requires a distinct entrance address."
@@ -303,7 +316,12 @@ class VideoCallSession:
             # they'll be identical. We add 1 to the low byte to force a different
             # session ID while keeping the same counter starting point (high 16 bits).
             call_ts = (init_ts + 1) & 0xFFFFFFFF
-            call_init = encode_call_init(our_addr, entrance_addr, call_ts)
+            if self._answer_mode:
+                # Join the incoming ring (0x0040 → apartment master).
+                call_init = encode_call_answer(our_addr, apt_addr, call_ts)
+            else:
+                # Start a new outbound view call (0x0028 → entrance).
+                call_init = encode_call_init(our_addr, entrance_addr, call_ts)
             await client.send_binary(ctpp, call_init)
 
             # Step 4: Open UDPM immediately after call init (PCAP order)

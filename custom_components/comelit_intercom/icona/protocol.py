@@ -259,6 +259,7 @@ def encode_actuator_open(
 
 # Action codes used in CTPP video signaling messages
 ACTION_CALL_INIT = 0x0028
+ACTION_ANSWER = 0x0040  # answer/join an incoming ring (addressed to apt master)
 ACTION_CODEC_NEG = 0x0008
 ACTION_RTPC_LINK = 0x000A
 ACTION_VIDEO_CONFIG = 0x001A
@@ -316,6 +317,45 @@ def encode_call_init(caller: str, callee: str, timestamp: int) -> bytes:
     buf += b"\xff\xff\xff\xff"
     buf += caller.encode("ascii") + b"\x00"
     buf += callee.encode("ascii") + b"\x00\x00"
+    return bytes(buf)
+
+
+def encode_call_answer(
+    caller: str,
+    apt_addr: str,
+    timestamp: int,
+    token: int | None = None,
+) -> bytes:
+    """Answer/join an incoming ring — 0x18C0 / action 0x0040.
+
+    Unlike encode_call_init (0x0028, addressed to the ENTRANCE to start a new
+    outbound view), answering is addressed to the **apartment master**
+    (`apt_addr` = get-config `vip.apt-address`) — it joins the existing
+    entrance→apartment call, which on some firmware (6741W) is the only
+    context that carries two-way audio. `caller` is our full address
+    (apt-address + subaddress); both are per-install, nothing is hardcoded.
+
+    Byte-exact to the app frame (PCAPdroid_25_Aug_16_56_11, t=13.116):
+      [0x18C0 LE16] [ts LE32] [0x0011 BE16] [0x0040 BE16]
+      [token LE16] [caller\\0] [0x10 0x0E] [0x00000000]
+      [0xFFFFFFFF] [caller\\0] [apt_addr\\0\\0]
+
+    `token` is a 2-byte per-call session id the device echoes back in its
+    0x1860/0x0041 response; when omitted it is derived from the timestamp.
+    """
+    tok = (timestamp & 0xFFFF) if token is None else (token & 0xFFFF)
+    buf = bytearray()
+    buf += struct.pack("<H", 0x18C0)
+    buf += struct.pack("<I", timestamp)
+    buf += struct.pack(">H", 0x0011)  # constant for this frame type
+    buf += struct.pack(">H", ACTION_ANSWER)  # 0x0040
+    buf += struct.pack("<H", tok)
+    buf += _null_terminated(caller)
+    buf += bytes([0x10, 0x0E])
+    buf += b"\x00\x00\x00\x00"
+    buf += b"\xff\xff\xff\xff"
+    buf += _null_terminated(caller)
+    buf += apt_addr.encode("ascii") + b"\x00\x00"
     return bytes(buf)
 
 
