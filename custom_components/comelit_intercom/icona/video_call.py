@@ -373,10 +373,14 @@ class VideoCallSession:
             # PCAP-verified: media_req_id = RTPC2 server_channel_id (device-assigned).
             # In PCAP: RTPC2 server_channel_id=0x606E (= UDPM server_channel_id + 2).
             media_req_id = rtpc2.server_channel_id
+            # Incoming AUDIO RTP (G.711 PCMA, PT8) arrives on RTPC1's channel
+            # (media_req_id-1), multiplexed on the same UDP socket as video.
+            # Tell the receiver to accept it too (PCAP-verified).
+            receiver.set_audio_req_id(rtpc1.server_channel_id)
             if is_verbose_logging():
                 _LOGGER.debug(
-                    "RTPC channels: rtpc1=0x%04X, rtpc2(media)=0x%04X",
-                    rtpc1.request_id,
+                    "RTPC channels: rtpc1(audio)=0x%04X, rtpc2(media)=0x%04X",
+                    rtpc1.server_channel_id,
                     media_req_id,
                 )
 
