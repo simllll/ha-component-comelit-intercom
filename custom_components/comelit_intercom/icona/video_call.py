@@ -17,6 +17,7 @@ from .exceptions import VideoCallError
 from .models import DeviceConfig
 from .protocol import (
     encode_answer_peer,
+    encode_audio_tx_enable,
     encode_call_ack,
     encode_call_init,
     encode_call_response_ack,
@@ -96,6 +97,17 @@ class VideoCallSession:
         self._on_ring = on_ring
         self._last_ring_fired: dict[str, float] = {}
         self._ring_dedup_window = 8.0
+        # Talk-back (TX audio) state. The TX loop pulls browser-mic PCMA from
+        # the RTSP server's backchannel queue, sends the 0x0070 enable once,
+        # then streams RTP to the device's own RTPC channel.
+        self._tx_audio_task: asyncio.Task | None = None
+        self._device_rtpc: Channel | None = None
+        self._tx_our_addr: str = ""
+        self._tx_entrance_addr: str = ""
+        self._tx_seq: int = 0
+        self._tx_ts: int = 0
+        self._tx_ssrc: int = 0xF15DDA47
+        self._tx_enabled: bool = False
         self._rtp_receiver: RtpReceiver | None = None
         self._rtsp_server: LocalRtspServer | None = rtsp_server
         self._timeout_task: asyncio.Task | None = None
@@ -480,6 +492,18 @@ class VideoCallSession:
             )
             self._active = True
 
+            # Step 10c: Talk-back (TX audio). Only when we own an external RTSP
+            # server (live view / snapshot manager) that can feed us browser
+            # mic audio via its backchannel queue. Stores the device's RTPC
+            # channel + addresses so the loop can enable + stream on demand.
+            self._device_rtpc = device_rtpc
+            self._tx_our_addr = our_addr
+            self._tx_entrance_addr = entrance_addr
+            if self._rtsp_server is not None and not self._snapshot_only:
+                self._tx_audio_task = asyncio.create_task(
+                    self._tx_audio_loop(client, ctpp)
+                )
+
             # Step 10d: Readiness gate — wait until the first real NAL has
             # been queued before reporting the session as ready.  Without
             # this, `Video ready in 1.5s` logs before a single video packet
@@ -558,7 +582,13 @@ class VideoCallSession:
         """
         self._active = False
 
-        for task_attr in ("_timeout_task", "_tcp_task", "_tcp_audio_task", "_ctpp_task"):
+        for task_attr in (
+            "_timeout_task",
+            "_tcp_task",
+            "_tcp_audio_task",
+            "_ctpp_task",
+            "_tx_audio_task",
+        ):
             task = getattr(self, task_attr)
             setattr(self, task_attr, None)
             if task and not task.done():
@@ -752,6 +782,71 @@ class VideoCallSession:
             )
         except Exception:
             _LOGGER.exception("Error forwarding mid-call ring")
+
+    def _build_tx_rtp(self, payload: bytes) -> bytes:
+        """Wrap a 20 ms A-law frame in an RTP packet (PT8) for the device."""
+        hdr = struct.pack(
+            "!BBHII",
+            0x80,  # version 2, no padding/extension/CSRC
+            8,  # PT8 = G.711 PCMA, marker 0
+            self._tx_seq & 0xFFFF,
+            self._tx_ts & 0xFFFFFFFF,
+            self._tx_ssrc,
+        )
+        self._tx_seq = (self._tx_seq + 1) & 0xFFFF
+        self._tx_ts = (self._tx_ts + len(payload)) & 0xFFFFFFFF
+        return hdr + payload
+
+    async def _send_tx_enable(self, client: IconaBridgeClient, ctpp: Channel) -> None:
+        """Send the one-shot 0x1840/0x0070 talk-back enable on CTPP."""
+        async with self._ctpp_lock:
+            self._call_counter += _CTR_INCR_BYTE4
+            frame = encode_audio_tx_enable(
+                self._tx_our_addr, self._tx_entrance_addr, self._call_counter
+            )
+            await client.send_binary(ctpp, frame)
+        if is_verbose_logging():
+            _LOGGER.debug(
+                "TX audio: sent 0x0070 enable, counter=0x%08X", self._call_counter
+            )
+
+    async def _tx_audio_loop(self, client: IconaBridgeClient, ctpp: Channel) -> None:
+        """Stream browser-mic PCMA to the device (talk-back).
+
+        Idle until the user opens the mic (first frame on the RTSP backchannel
+        queue); then send the 0x0070 enable once and forward each 20 ms A-law
+        frame as RTP on the device's own RTPC channel. Reframes to the device's
+        expected 160-byte (20 ms) frames. On a view-only session (no mic) this
+        never sends anything, so it doesn't perturb the RX path.
+        """
+        server = self._rtsp_server
+        device_rtpc = self._device_rtpc
+        if server is None or device_rtpc is None:
+            return
+        buffer = bytearray()
+        try:
+            while self._active:
+                try:
+                    payload = await asyncio.wait_for(
+                        server.backchannel_queue.get(), timeout=1.0
+                    )
+                except TimeoutError:
+                    continue
+                if not self._active:
+                    break
+                if not self._tx_enabled:
+                    await self._send_tx_enable(client, ctpp)
+                    self._tx_enabled = True
+                buffer += payload
+                while len(buffer) >= 160:
+                    frame = bytes(buffer[:160])
+                    del buffer[:160]
+                    with contextlib.suppress(Exception):
+                        await client.send_binary(device_rtpc, self._build_tx_rtp(frame))
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            _LOGGER.debug("TX audio loop error", exc_info=True)
 
     async def _inline_reestablish(
         self,

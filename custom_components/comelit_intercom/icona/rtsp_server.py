@@ -80,6 +80,7 @@ class _TcpClient:
     writer: asyncio.StreamWriter
     video_ch: int | None = None  # interleaved channel for video RTP
     audio_ch: int | None = None  # interleaved channel for audio RTP
+    backchannel_ch: int | None = None  # interleaved channel the client SENDS on
 
 
 class LocalRtspServer:
@@ -107,6 +108,10 @@ class LocalRtspServer:
         # device's own 90 kHz PTS flows end-to-end instead of being fabricated.
         self.nal_queue: asyncio.Queue[tuple[int, bytes]] = asyncio.Queue(maxsize=300)
         self.audio_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=500)
+        # Backchannel: G.711 PCMA payloads the client (go2rtc) sends TO us,
+        # i.e. the browser mic. Drained by the video session's TX loop and
+        # forwarded to the device. Bounded small — talk-back must stay live.
+        self.backchannel_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=100)
         # RTP pass-through queue: raw video RTP packets forwarded with
         # header rewrite only (no NAL reassembly / FU-A re-fragmentation).
         self.rtp_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=500)
@@ -312,6 +317,10 @@ class LocalRtspServer:
             with contextlib.suppress(asyncio.QueueEmpty):
                 self.audio_queue.get_nowait()
                 drained_audio += 1
+        # Drop any stale backchannel (mic) audio so a new call starts clean.
+        while not self.backchannel_queue.empty():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self.backchannel_queue.get_nowait()
         # Audio–video sync bootstrap: the audio feed loop has been advancing
         # `_audio_ts` by 160 per 20 ms of silence since server start, so by
         # the time the first video frame of a new call arrives, audio is N
@@ -414,7 +423,10 @@ class LocalRtspServer:
                     self._send(writer, cseq, extra=("Public: OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN\r\n"))
 
                 elif method == "DESCRIBE":
-                    sdp = self._build_sdp().encode()
+                    # go2rtc requests two-way audio via the ONVIF Require
+                    # header; only then do we advertise the backchannel track.
+                    want_backchannel = "backchannel" in headers.get("require", "").lower()
+                    sdp = self._build_sdp(backchannel=want_backchannel).encode()
                     writer.write(
                         f"RTSP/1.0 200 OK\r\n"
                         f"CSeq: {cseq}\r\n"
@@ -427,8 +439,11 @@ class LocalRtspServer:
 
                 elif method == "SETUP":
                     transport_hdr = headers.get("transport", "")
-                    is_audio = "/audio" in url or "track2" in url
-                    transport_resp = self._parse_setup(transport_hdr, is_audio, client, client_host)
+                    is_backchannel = "backchannel" in url
+                    is_audio = not is_backchannel and ("/audio" in url or "track2" in url)
+                    transport_resp = self._parse_setup(
+                        transport_hdr, is_audio, client, client_host, is_backchannel
+                    )
                     self._send(writer, cseq, extra=(f"Session: {self._session_id}\r\n{transport_resp}\r\n"))
 
                 elif method == "PLAY":
@@ -470,7 +485,7 @@ class LocalRtspServer:
                     # enough — recent libavformat only reliably sets pix_fmt
                     # from in-band NAL units seen in the actual RTP stream.
                     self._prime_client_with_parameter_sets(client)
-                    await self._wait_for_teardown(reader)
+                    await self._read_client_stream(reader, client)
                     break
 
                 elif method == "TEARDOWN":
@@ -505,6 +520,7 @@ class LocalRtspServer:
         is_audio: bool,
         client: _TcpClient,
         client_host: str,
+        is_backchannel: bool = False,
     ) -> str:
         """Parse SETUP Transport header, update client state, return response."""
         use_tcp = "RTP/AVP/TCP" in transport_hdr or "interleaved" in transport_hdr
@@ -514,7 +530,9 @@ class LocalRtspServer:
             for part in transport_hdr.split(";"):
                 if "interleaved" in part:
                     channel = int(part.split("=", 1)[1].split("-")[0])
-            if is_audio:
+            if is_backchannel:
+                client.backchannel_ch = channel
+            elif is_audio:
                 client.audio_ch = channel
             else:
                 client.video_ch = channel
@@ -546,7 +564,7 @@ class LocalRtspServer:
                 return int(ports.split("-")[0])
         return 0
 
-    def _build_sdp(self) -> str:
+    def _build_sdp(self, backchannel: bool = False) -> str:
         sps_b64 = base64.b64encode(self._latest_sps).decode()
         pps_b64 = base64.b64encode(self._latest_pps).decode()
         # profile-level-id = first 3 bytes of SPS (profile_idc, constraints, level_idc)
@@ -579,17 +597,91 @@ class LocalRtspServer:
                 "a=rtpmap:8 PCMA/8000\r\n"
                 "a=control:audio\r\n"
             )
+            # ONVIF backchannel (talk-back): only advertised when the client
+            # asked for it via `Require: www.onvif.org/ver20/backchannel`, so
+            # plain clients (HLS stream worker) never see it. a=sendonly is the
+            # ONVIF convention marking the media the CLIENT sends on; go2rtc
+            # SETUPs it and relays the browser mic (PCMA) to us.
+            if backchannel:
+                sdp += (
+                    "m=audio 0 RTP/AVP 8\r\n"
+                    "c=IN IP4 0.0.0.0\r\n"
+                    "a=rtpmap:8 PCMA/8000\r\n"
+                    "a=control:backchannel\r\n"
+                    "a=sendonly\r\n"
+                )
         return sdp
 
-    async def _wait_for_teardown(self, reader: asyncio.StreamReader) -> None:
-        """Hold client connection open until TEARDOWN or disconnect."""
+    async def _read_client_stream(
+        self, reader: asyncio.StreamReader, client: _TcpClient
+    ) -> None:
+        """Hold the client connection open, consuming its inbound bytes.
+
+        Two kinds of data arrive from the client after PLAY:
+        - RTSP text (TEARDOWN) — ends the session.
+        - Interleaved binary frames ($ ch len ...) — go2rtc's backchannel RTP
+          (the browser mic). We extract the G.711 payload and queue it for the
+          video session's TX loop. RTCP (backchannel_ch + 1) is ignored.
+        """
+        buf = bytearray()
         while self._running:
             try:
-                data = await asyncio.wait_for(reader.read(256), timeout=10.0)
-                if not data or b"TEARDOWN" in data:
-                    break
+                data = await asyncio.wait_for(reader.read(4096), timeout=30.0)
             except TimeoutError:
-                pass
+                continue
+            if not data:
+                break
+            buf += data
+            while buf:
+                if buf[0] == 0x24:  # '$' interleaved binary frame
+                    if len(buf) < 4:
+                        break
+                    ch = buf[1]
+                    length = (buf[2] << 8) | buf[3]
+                    if len(buf) < 4 + length:
+                        break
+                    frame = bytes(buf[4 : 4 + length])
+                    del buf[: 4 + length]
+                    if client.backchannel_ch is not None and ch == client.backchannel_ch:
+                        self._on_backchannel_rtp(frame)
+                else:
+                    # RTSP text (e.g. TEARDOWN). Consume up to the next line;
+                    # if we can't see a full line yet, wait for more bytes.
+                    nl = buf.find(b"\n")
+                    if nl == -1:
+                        break
+                    line = bytes(buf[: nl + 1])
+                    del buf[: nl + 1]
+                    if b"TEARDOWN" in line:
+                        return
+
+    def _on_backchannel_rtp(self, rtp: bytes) -> None:
+        """Extract the G.711 payload from a backchannel RTP packet and queue it."""
+        if len(rtp) < 12:
+            return
+        b0 = rtp[0]
+        cc = b0 & 0x0F
+        has_ext = (b0 >> 4) & 0x01
+        pt = rtp[1] & 0x7F
+        if pt not in (0, 8):  # only G.711 PCMU/PCMA
+            return
+        offset = 12 + 4 * cc
+        if has_ext:
+            if len(rtp) < offset + 4:
+                return
+            ext_words = (rtp[offset + 2] << 8) | rtp[offset + 3]
+            offset += 4 + 4 * ext_words
+        payload = rtp[offset:]
+        if not payload:
+            return
+        try:
+            self.backchannel_queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            # Stay live: drop the oldest frame and enqueue the newest.
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self.backchannel_queue.get_nowait()
+            with contextlib.suppress(asyncio.QueueFull):
+                self.backchannel_queue.put_nowait(payload)
 
     # ------------------------------------------------------------------
     # RTP broadcast
