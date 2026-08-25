@@ -68,11 +68,13 @@
         "title": "Comelit Intercom options",
         "data": {
           "enable_notifications": "Doorbell ring notifications (cloud push)",
-          "push_token": "Push identity token (optional)"
+          "push_token": "Push identity token (optional)",
+          "verbose_logging": "Verbose debug logging"
         },
         "data_description": {
           "enable_notifications": "Receive real-time ring events via Comelit's cloud (FCM). Requires the device to have internet access.",
-          "push_token": "Advanced: enroll push under a different ICONA token so a paired phone keeps its own notifications. Leave empty to use the main token."
+          "push_token": "Advanced: enroll push under a different ICONA token so a paired phone keeps its own notifications. Leave empty to use the main token.",
+          "verbose_logging": "Log detailed protocol/video/audio internals (for bug reports). Also enable debug logging on the integration to capture everything."
         }
       }
     }
