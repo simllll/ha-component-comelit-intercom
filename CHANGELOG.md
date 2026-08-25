@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.9.0](https://github.com/simllll/hass-comelit-icona/compare/v1.8.1...v1.9.0) (2026-08-25)
+
+
+### Features
+
+* add a Verbose debug logging option ([#32](https://github.com/simllll/hass-comelit-icona/issues/32)) ([6809b08](https://github.com/simllll/hass-comelit-icona/commit/6809b0832c14d9780747f62d9cea863be1e0c66a))
+
 ## [1.8.1](https://github.com/simllll/hass-comelit-icona/compare/v1.8.0...v1.8.1) (2026-08-25)
 
 
