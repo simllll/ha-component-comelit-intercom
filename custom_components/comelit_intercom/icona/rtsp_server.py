@@ -552,6 +552,17 @@ class LocalRtspServer:
             f"profile-level-id={profile_level_id};"
             f"sprop-parameter-sets={sps_b64},{pps_b64}\r\n"
             "a=control:video\r\n"
+            # Audio: G.711 PCMA (PT8, 8 kHz). Static payload type, but an
+            # explicit rtpmap keeps go2rtc happy. Without this m-line no client
+            # (go2rtc, FFmpeg) ever issues SETUP audio, so audio_ch stays None
+            # and the entrance audio broadcast has no channel to write to.
+            # HLS can't mux G.711 and silently drops the track (video keeps
+            # working); go2rtc carries PCMA to the browser over WebRTC, which
+            # is what enables the two-way/unmute control.
+            "m=audio 0 RTP/AVP 8\r\n"
+            "c=IN IP4 0.0.0.0\r\n"
+            "a=rtpmap:8 PCMA/8000\r\n"
+            "a=control:audio\r\n"
         )
 
     async def _wait_for_teardown(self, reader: asyncio.StreamReader) -> None:
