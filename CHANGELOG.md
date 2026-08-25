@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.7.2](https://github.com/simllll/hass-comelit-icona/compare/v1.7.1...v1.7.2) (2026-08-25)
+
+
+### Bug Fixes
+
+* don't create a Floor call event in single-house/kit mode ([#26](https://github.com/simllll/hass-comelit-icona/issues/26)) ([a6f94a6](https://github.com/simllll/hass-comelit-icona/commit/a6f94a617b1e4fc0337c63329fe903bdc856f558))
+
 ## [1.7.1](https://github.com/simllll/hass-comelit-icona/compare/v1.7.0...v1.7.1) (2026-08-25)
 
 
