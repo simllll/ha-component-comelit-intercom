@@ -45,6 +45,13 @@ _LOGGER = logging.getLogger(__name__)
 
 _MAX_RTP_PAYLOAD = 1400  # bytes — safe MTU headroom
 _PCMA_SILENCE = bytes([0xD5] * 160)  # 20ms G.711 A-law silence
+_AUDIO_FRAME_INTERVAL = 0.02  # 20 ms per G.711 frame; idle-silence cadence
+# During a call the entrance streams continuous PCMA; TCP delivers it in
+# bursts so the queue briefly empties between them. Wait this long for the
+# next real frame before treating the call as idle and resuming silence —
+# long enough to ride out TCP jitter without injecting clicks, short enough
+# that go2rtc's audio track doesn't starve once a call really ends.
+_AUDIO_CALL_GAP = 0.5
 
 # RTCP — seconds between 1900-01-01 (NTP epoch) and 1970-01-01 (Unix epoch).
 # Used to encode wall-clock time into the 64-bit NTP field of Sender Reports.
@@ -961,18 +968,29 @@ class LocalRtspServer:
         """Broadcast G.711 PCMA to all registered clients.
 
         Real entrance audio is forwarded the moment it lands on the queue
-        (low latency). When the queue is idle, a 20 ms silence frame is sent
-        every 20 ms so the 8 kHz audio clock keeps advancing in real time
-        (160 samples / frame) and go2rtc/the stream worker stay alive
-        between calls. Clients that never SETUP audio (e.g. the HLS stream
-        worker) are skipped by _broadcast_rtp, so this is a no-op for them.
+        (low latency). Silence is only emitted when genuinely idle: sending a
+        0xD5 frame into a sub-second gap during an active call injects audible
+        clicks between real samples, so once audio is flowing we block for the
+        next real frame (up to _AUDIO_CALL_GAP) instead. _audio_ts still
+        advances 160 per real frame and the device sends ~50/s, so the 8 kHz
+        clock stays correct either way. When truly idle, a 20 ms silence frame
+        every 20 ms keeps the clock advancing and go2rtc/the stream worker
+        alive between calls. Clients that never SETUP audio (e.g. the HLS
+        stream worker) are skipped by _broadcast_rtp, a no-op for them.
         """
+        idle = True
         try:
             while self._running:
+                timeout = _AUDIO_FRAME_INTERVAL if idle else _AUDIO_CALL_GAP
                 try:
-                    payload = await asyncio.wait_for(self.audio_queue.get(), timeout=0.02)
+                    payload = await asyncio.wait_for(self.audio_queue.get(), timeout=timeout)
+                    idle = False
                 except TimeoutError:
+                    # Gap exceeded the tolerance — call ended or genuinely
+                    # silent. Emit a silence keepalive and go back to the
+                    # 20 ms idle cadence.
                     payload = _PCMA_SILENCE
+                    idle = True
 
                 pkt = _build_rtp(
                     pt=8,
