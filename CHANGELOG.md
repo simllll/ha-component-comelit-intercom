@@ -4,6 +4,19 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.10.0](https://github.com/simllll/hass-comelit-icona/compare/v1.9.3...v1.10.0) (2026-08-25)
+
+
+### Features
+
+* add an option to enable/disable the audio stream ([#40](https://github.com/simllll/hass-comelit-icona/issues/40)) ([aba387c](https://github.com/simllll/hass-comelit-icona/commit/aba387c9c148538ecd7355f6ddff0e0f6471f3fc))
+
+
+### Bug Fixes
+
+* forward rings that arrive during an active video/snapshot call ([#43](https://github.com/simllll/hass-comelit-icona/issues/43)) ([8491a1e](https://github.com/simllll/hass-comelit-icona/commit/8491a1edc7ba121569e8ee13dafc7807997b84ad))
+* stop injecting silence into mid-call audio gaps (clicks) ([#42](https://github.com/simllll/hass-comelit-icona/issues/42)) ([32bcd59](https://github.com/simllll/hass-comelit-icona/commit/32bcd59dea498fe7442ae50e2cf976a027e35dd3))
+
 ## [1.9.3](https://github.com/simllll/hass-comelit-icona/compare/v1.9.2...v1.9.3) (2026-08-25)
 
 
