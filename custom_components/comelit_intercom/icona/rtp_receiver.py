@@ -81,6 +81,7 @@ class RtpReceiver:
         self._port = port
         self._control_req_id = control_req_id
         self._media_req_id = media_req_id
+        self._audio_req_id = 0  # RTPC1 channel id — set after RTPC channels open
         self._udpm_token = udpm_token
 
         # UDP transport to device
@@ -204,6 +205,12 @@ class RtpReceiver:
         if is_verbose_logging():
             _LOGGER.debug("Media req_id set to 0x%04X", media_req_id)
 
+    def set_audio_req_id(self, audio_req_id: int) -> None:
+        """Set the ICONA request-id that incoming audio RTP arrives on (RTPC1)."""
+        self._audio_req_id = audio_req_id
+        if is_verbose_logging():
+            _LOGGER.debug("Audio req_id set to 0x%04X", audio_req_id)
+
     async def start_media(self) -> None:
         """Start the decode task for processing H.264 NAL units.
 
@@ -265,7 +272,13 @@ class RtpReceiver:
 
         req_id = struct.unpack_from("<H", data, 4)[0]
 
-        if req_id == self._media_req_id:
+        # Audio and video share the UDP media socket but carry different ICONA
+        # request-ids: video = RTPC2 (media_req_id), audio = RTPC1
+        # (audio_req_id, typically media_req_id-1). Accept both; _process_rtp
+        # routes to the audio or H.264 pipeline by RTP payload type.
+        if req_id == self._media_req_id or (
+            self._audio_req_id and req_id == self._audio_req_id
+        ):
             # Strip 8-byte ICONA header AND Comelit trailer using body_len
             body_len = struct.unpack_from("<H", data, 2)[0]
             raw_rtp = data[HEADER_SIZE : HEADER_SIZE + body_len]
