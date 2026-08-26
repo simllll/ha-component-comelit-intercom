@@ -985,6 +985,10 @@ class VideoCallSession:
                 rtsp_server.audio_queue,
                 rtp_queue=rtsp_server.rtp_queue,
             )
+            # Real mic → visitor talk-back: the audio sender pulls browser-mic
+            # PCMA from the RTSP backchannel queue (go2rtc ANNOUNCE/RECORD) and
+            # forwards it to the device, falling back to silence when quiet.
+            receiver.attach_backchannel_queue(rtsp_server.backchannel_queue)
             await receiver.start_control()
             receiver.start_keepalive()
             self._rtp_receiver = receiver
