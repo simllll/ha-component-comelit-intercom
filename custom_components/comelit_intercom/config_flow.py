@@ -17,6 +17,7 @@ from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 
 from .comelit_client import IconaBridgeClient
 from .const import (
+    CONF_AUTO_ANSWER,
     CONF_ENABLE_AUDIO,
     CONF_ENABLE_NOTIFICATIONS,
     CONF_PUSH_TOKEN,
@@ -410,6 +411,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional(
                     CONF_ENABLE_AUDIO,
                     default=options.get(CONF_ENABLE_AUDIO, True),
+                ): bool,
+                vol.Optional(
+                    CONF_AUTO_ANSWER,
+                    default=options.get(CONF_AUTO_ANSWER, False),
                 ): bool,
                 vol.Optional(
                     CONF_VERBOSE_LOGGING,

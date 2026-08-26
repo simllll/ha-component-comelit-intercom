@@ -266,6 +266,8 @@ ACTION_PEER = 0x0070  # "accept call" / peer (answer sequence msg 1)
 ACTION_CONFIG_ACK = 0x000E  # supplemental config ACK (answer sequence msg 2)
 ACTION_HANGUP = 0x002D  # '-' = hangup
 ACTION_DOOR_OPEN = 0x000D  # door open on active video CTPP channel (PCAP-verified)
+ACTION_CALL_ACCEPTED = 0x0002  # device→app on outbound; app→device on inbound answer
+ACTION_RTPC2_READY = 0x0003  # sent by app after RTPC2 opens on inbound answer (PCAP-verified)
 
 
 def _build_ctpp_video_msg(
@@ -319,11 +321,12 @@ def encode_call_init(caller: str, callee: str, timestamp: int) -> bytes:
     return bytes(buf)
 
 
-def encode_call_ack(caller: str, callee: str, timestamp: int) -> bytes:
+def encode_call_ack(caller: str, callee: str, timestamp: int, codec_param: int = 0x27) -> bytes:
     """Encode codec negotiation / call ack (4018 prefix, action 0x0008).
 
     Sent after receiving initial call responses.
-    Extra bytes: 0x49='I' codec marker, 0x00, 0x27=39 (codec param), padding.
+    Extra bytes: 0x49='I' codec marker, 0x00, codec_param, padding.
+    codec_param: 0x27 for outbound (HA-initiated), 0x07 for inbound (PCAP-verified).
     """
     return _build_ctpp_video_msg(
         prefix=0x1840,
@@ -332,7 +335,7 @@ def encode_call_ack(caller: str, callee: str, timestamp: int) -> bytes:
         flags=0x0003,
         caller=caller,
         callee=callee,
-        extra=bytes([0x49, 0x00, 0x27, 0x00, 0x00, 0x00]),
+        extra=bytes([0x49, 0x00, codec_param, 0x00, 0x00, 0x00]),
     )
 
 
@@ -482,17 +485,21 @@ def encode_answer_video_reconfig(
 
 def encode_answer_peer(
     caller: str,
-    entrance_addr: str,
+    callee: str,
     timestamp: int,
     renewal: bool = False,
+    inbound: bool = False,
 ) -> bytes:
     """Encode peer/accept message (action 0x70).
 
-    PCAP-verified wire format:
+    Wire format (PCAP2-verified for both outbound and inbound):
       [prefix LE16] [timestamp LE32] [inner_len BE16] [0x0070 BE16]
-      [caller\\0] [flag 0x01 0x00] [0xFFFFFFFF]
-      [caller\\0] [entrance_addr\\0\\0]
-    inner_payload = caller (our full address e.g. "SB0000061") + \\0 + [flag, 0x00]
+      [caller\\0] [flag 0x01 0x00] [0x0000 if inbound] [0xFFFFFFFF]
+      [caller\\0] [callee\\0\\0]
+
+    Outbound: callee=entrance_addr, no extra padding before separator.
+    Inbound:  callee=our_base_addr, extra 0x0000 padding before separator.
+    Both formats include caller after the separator.
 
     Initial call: prefix=0x1840, flag=0x01
     Renewal:      prefix=0x1860, flag=0x00
@@ -506,9 +513,11 @@ def encode_answer_peer(
     buf += struct.pack(">H", 2 + len(inner_payload))  # inner_len = action(2) + payload
     buf += struct.pack(">H", ACTION_PEER)  # 0x0070
     buf += inner_payload
+    if inbound:
+        buf += b"\x00\x00"  # extra padding before separator (PCAP2-verified)
     buf += b"\xff\xff\xff\xff"
     buf += _null_terminated(caller)
-    buf += entrance_addr.encode("ascii") + b"\x00\x00"
+    buf += callee.encode("ascii") + b"\x00\x00"
     return bytes(buf)
 
 
@@ -533,6 +542,42 @@ def encode_answer_config_ack(
     buf += _null_terminated(caller)
     buf += entrance_addr.encode("ascii") + b"\x00\x00"
     return bytes(buf)
+
+
+def encode_rtpc2_ready(caller: str, callee: str, timestamp: int) -> bytes:
+    """Encode RTPC2-ready message (0x1840/0x0003, flags=0x000A).
+
+    Sent immediately after RTPC2 opens on inbound answer calls. From PCAP:
+    extra=b"\\x00\\x00". Purpose unknown; required by device to proceed.
+    """
+    return _build_ctpp_video_msg(
+        prefix=0x1840,
+        timestamp=timestamp,
+        action=ACTION_RTPC2_READY,
+        flags=0x000A,
+        caller=caller,
+        callee=callee,
+        extra=b"\x00\x00",
+    )
+
+
+def encode_call_accepted(caller: str, callee: str, timestamp: int) -> bytes:
+    """Encode call-accepted message sent TO the device on inbound answer.
+
+    On inbound calls the roles are reversed: the app sends ACTION_CALL_ACCEPTED
+    (0x1840/0x0002, flags=0x000C) to the device instead of waiting to receive it.
+    PCAP2-verified extra=b"\\x00\\x00" (4 total FF bytes = separator only).
+    Sent after the PEER message.
+    """
+    return _build_ctpp_video_msg(
+        prefix=0x1840,
+        timestamp=timestamp,
+        action=ACTION_CALL_ACCEPTED,
+        flags=0x000C,
+        caller=caller,
+        callee=callee,
+        extra=b"\x00\x00",
+    )
 
 
 def encode_door_open_during_video(

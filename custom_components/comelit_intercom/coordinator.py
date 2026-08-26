@@ -36,7 +36,7 @@ from .const import (
 )
 from .icona.channels import ChannelType
 from .icona.client import IconaBridgeClient as SharedIconaClient
-from .icona.ctpp import ctpp_init_sequence
+from .icona.ctpp import _VIP_ACK_TS_INCR, ctpp_init_sequence
 from .video_stream import ComelitStreamManager
 
 _LOGGER = logging.getLogger(__name__)
@@ -166,6 +166,49 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def ctpp_init_ts(self) -> int:
         """init_ts of the last CTPP init on the shared connection."""
         return self._ctpp_init_ts
+
+    # --- inbound call answer (device-initiated ring) --------------------
+
+    def _on_inbound_ring(self, entrance_addr: str, ring_ts: int) -> None:
+        """Called by the VIP listener on a 0x18C0 call-init (doorbell ring).
+
+        Schedules the full 20-step inbound answer sequence as a background
+        task so it never blocks the VIP listener read loop. The ring's LE32
+        timestamp (ring_ts) is required — the answer sequence derives fresh_ts
+        from it via the device's proprietary transform.
+        """
+        _LOGGER.debug(
+            "Inbound ring: entrance=%s ring_ts=0x%08X", entrance_addr, ring_ts
+        )
+        self.entry.async_create_background_task(
+            self.hass,
+            self.async_start_inbound_video(entrance_addr, ring_ts),
+            "comelit-inbound-video",
+        )
+
+    async def async_start_inbound_video(
+        self, entrance_addr: str, ring_ts: int
+    ) -> None:
+        """Answer a device-initiated ring: run inbound signaling and start media.
+
+        Delegates to the stream manager, which reuses the shared client + held
+        CTPP and pauses the doorbell listener for the duration (same model as
+        the outbound video path). The normal ring event is fired separately by
+        the VIP listener, so we do not re-fire it here.
+        """
+        # Renewal ACK ts the device expects during the call — same increment the
+        # VIP listener uses for its keepalive ACKs (init_ts + 0x01010000).
+        renewal_ack_ts = (self._ctpp_init_ts + _VIP_ACK_TS_INCR) & 0xFFFFFFFF
+        try:
+            await self.stream.async_start_inbound(
+                entrance_addr, ring_ts, renewal_ack_ts=renewal_ack_ts
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("Inbound video answer failed", exc_info=True)
+
+    async def async_answer_inbound(self) -> None:
+        """Start two-way audio for the active inbound call (answer button)."""
+        await self.stream.async_answer_inbound()
 
     async def async_start_shared(self) -> None:
         """Connect + authenticate the shared client and open/init CTPP once.
