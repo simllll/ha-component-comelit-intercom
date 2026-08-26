@@ -18,7 +18,6 @@ from .models import DeviceConfig
 from .protocol import (
     encode_answer_peer,
     encode_call_ack,
-    encode_call_answer,
     encode_call_init,
     encode_call_response_ack,
     encode_door_open_during_video,
@@ -317,12 +316,21 @@ class VideoCallSession:
             # session ID while keeping the same counter starting point (high 16 bits).
             call_ts = (init_ts + 1) & 0xFFFFFFFF
             if self._answer_mode:
-                # Join the incoming ring (0x0040 → apartment master).
-                call_init = encode_call_answer(our_addr, apt_addr, call_ts)
+                # Answer = the fresh CTPP registration we just did above
+                # (ctpp_init_sequence, byte-identical to the app's frame).
+                # While a ring is active the device connects that registration
+                # into the call — we must NOT send a call_init (the app
+                # doesn't either; doing so is a duplicate registration and the
+                # device just keeps ringing).
+                if is_verbose_logging():
+                    _LOGGER.debug(
+                        "Answer mode: fresh CTPP registration is the answer, "
+                        "skipping call_init"
+                    )
             else:
                 # Start a new outbound view call (0x0028 → entrance).
                 call_init = encode_call_init(our_addr, entrance_addr, call_ts)
-            await client.send_binary(ctpp, call_init)
+                await client.send_binary(ctpp, call_init)
 
             # Step 4: Open UDPM immediately after call init (PCAP order)
             udpm = await client.open_channel("UDPM", ChannelType.UAUT, trailing_byte=1)

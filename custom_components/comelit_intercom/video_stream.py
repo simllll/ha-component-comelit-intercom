@@ -233,11 +233,14 @@ class ComelitStreamManager:
         if client is None or not client.connected:
             raise RuntimeError("shared ICONA connection not available")
 
-        # Pause the doorbell VIP listener so it stops consuming CTPP messages
-        # meant for the video session. CTPP/CSPB stay open and are reused by
-        # the session directly; the listener is resumed on stop/idle.
         events = self._coordinator.events_manager
-        if events is not None:
+        if answer_mode:
+            # Two-way answer needs a FRESH CTPP registration (the 6741W won't
+            # give audio on our reused held one). Release the shared CTPP so
+            # the session opens/inits its own — this also pauses the listener.
+            await self._coordinator.async_release_ctpp()
+        elif events is not None:
+            # Plain view: pause the listener but reuse the shared CTPP (stable).
             with contextlib.suppress(Exception):
                 await events.async_pause_local()
 
@@ -281,6 +284,7 @@ class ComelitStreamManager:
             with contextlib.suppress(Exception):
                 await self._session.stop()
             self._session = None
+        was_answer = self._session_answer_mode
         self._entrance = None
         self._session_answer_mode = False
         if self._server is not None:
@@ -289,10 +293,16 @@ class ComelitStreamManager:
         # reconnect teardown (the shared client is dead; the coordinator
         # re-attaches the listener after it re-opens CTPP).
         if resume_listener:
-            events = self._coordinator.events_manager
-            if events is not None:
+            if was_answer:
+                # The answer used its own fresh CTPP (now closed) — reopen the
+                # shared registration and restart the listener.
                 with contextlib.suppress(Exception):
-                    await events.async_resume_local()
+                    await self._coordinator.async_restore_ctpp()
+            else:
+                events = self._coordinator.events_manager
+                if events is not None:
+                    with contextlib.suppress(Exception):
+                        await events.async_resume_local()
 
     async def async_stop_for_reconnect(self) -> None:
         """Stop any active session without resuming the listener.

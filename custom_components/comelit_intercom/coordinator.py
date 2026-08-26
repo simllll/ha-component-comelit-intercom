@@ -234,6 +234,41 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _LOGGER.info("Shared CTPP opened for VIP events (%s, ts=0x%08X)", our_addr, ts)
         return ts
 
+    async def async_release_ctpp(self) -> None:
+        """Hand the shared CTPP registration over so an answer call can
+        register FRESH.
+
+        The 6741W only promotes a call to two-way audio for a freshly-
+        registered CTPP, not our long-held reused one. So for an answer we
+        pause the listener and close the shared CTPP/CSPB — the video session
+        then opens its own fresh CTPP (get_channel returns None → it owns and
+        inits a new one), mimicking the app. Restore with async_restore_ctpp.
+        """
+        if self.events_manager is not None:
+            with contextlib.suppress(Exception):
+                await self.events_manager.async_pause_local()
+        client = self._shared_client
+        if client is None:
+            return
+        async with self._ctpp_lock:
+            for name in ("CTPP", "CSPB"):
+                with contextlib.suppress(Exception):
+                    await client.close_channel(name)
+        _LOGGER.debug("Shared CTPP released for a fresh answer registration")
+
+    async def async_restore_ctpp(self) -> None:
+        """Re-open the shared CTPP and restart the listener after an answer."""
+        client = self._shared_client
+        if client is None or not client.connected:
+            return
+        async with self._ctpp_lock:
+            with contextlib.suppress(Exception):
+                await self._open_ctpp_channels(client)
+        if self.events_manager is not None:
+            with contextlib.suppress(Exception):
+                await self.events_manager.async_resume_local()
+        _LOGGER.debug("Shared CTPP restored after answer call")
+
     def _on_shared_disconnect(self) -> None:
         """Called by the shared client when its TCP connection drops.
 
