@@ -70,12 +70,14 @@
           "enable_notifications": "Doorbell ring notifications (cloud push)",
           "push_token": "Push identity token (optional)",
           "enable_audio": "Entrance audio (two-way call audio)",
+          "auto_answer": "Auto-answer rings (experimental two-way)",
           "verbose_logging": "Verbose debug logging"
         },
         "data_description": {
           "enable_notifications": "Receive real-time ring events via Comelit's cloud (FCM). Requires the device to have internet access.",
           "push_token": "Advanced: enroll push under a different ICONA token so a paired phone keeps its own notifications. Leave empty to use the main token.",
           "enable_audio": "Carry the entrance's G.711 audio in the camera stream (audible via the unmute control in the WebRTC view). Turn off if the audio track disturbs the HLS/video playback. Takes effect on the next stream reconnect.",
+          "auto_answer": "Experimental: when the doorbell rings, immediately answer the call (join the incoming entrance→apartment call) for two-way audio, instead of a passive view. Needed on some firmware (6741W) that only streams audio in an answered call. May be unstable; leave off unless testing.",
           "verbose_logging": "Log detailed protocol/video/audio internals (for bug reports). Also enable debug logging on the integration to capture everything."
         }
       }

@@ -39,6 +39,9 @@ CONF_VERBOSE_LOGGING = "verbose_logging"
 # Advertise/carry the G.711 PCMA audio track in the RTSP stream. On by
 # default; turn off if the audio track upsets the HLS/video path.
 CONF_ENABLE_AUDIO = "enable_audio"
+# Experimental: when a doorbell rings, immediately answer the call (two-way
+# audio) from a clean state instead of a passive view. Off by default.
+CONF_AUTO_ANSWER = "auto_answer"
 
 FCM_PROJECT_ID = "friend-home-55eb5"
 FCM_APP_ID = "1:140273510303:android:ecb227a626746c69"

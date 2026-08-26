@@ -22,6 +22,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
+    CONF_AUTO_ANSWER,
     DOMAIN,
     EVENT_DOORBELL,
 )
@@ -292,6 +293,20 @@ class ComelitEventsManager:
         async_dispatcher_send(
             self.hass, signal_doorbell(self.entry.entry_id), payload
         )
+
+        # Experimental auto-answer: on a real ring, immediately answer the
+        # call (two-way) from a clean state — this is the only reliably-fresh
+        # moment to join it. Off by default; opt-in via the option.
+        if payload.get("event_type") == "ring" and self.entry.options.get(
+            CONF_AUTO_ANSWER, False
+        ):
+            _LOGGER.info("Auto-answer: ring received, answering the call")
+            self.hass.async_create_task(self._auto_answer())
+
+    async def _auto_answer(self) -> None:
+        """Start an answer-mode call for the ring that just arrived."""
+        with contextlib.suppress(Exception):
+            await self.coordinator.stream.async_answer()
 
     def _doorbell_name(self, caller: str | None) -> str | None:
         """Map a caller VIP address to a friendly doorbell name."""
