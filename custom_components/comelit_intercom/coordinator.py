@@ -45,6 +45,10 @@ from .video_stream import ComelitStreamManager
 
 _LOGGER = logging.getLogger(__name__)
 
+# Keepalive cadence — well under the client's 300s idle timeout and the panel's
+# ~120s renewal cycle, so the connection never goes idle-dead when nothing rings.
+_KEEPALIVE_INTERVAL = 90
+
 
 class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Class to manage fetching Comelit data."""
@@ -69,6 +73,12 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # listener derives its outgoing ACK timestamps from this.
         self._ctpp_init_ts: int = 0
         self._reconnecting = False
+        # Proactive keepalive: the panel sleeps when idle and stops sending, so
+        # the receive-loop's 300s idle timeout fires and churns a reconnect
+        # every ~5 min. A periodic benign server-info query keeps the panel
+        # replying (resets the idle timer) — the same benign query the app
+        # sends, with no push-enrollment side effect.
+        self._keepalive_task: asyncio.Task[None] | None = None
 
         # Live-video/snapshot manager reuses the shared connection's CTPP.
         self.stream = ComelitStreamManager(
@@ -291,6 +301,9 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             with contextlib.suppress(Exception):
                 await self.events_manager.async_attach_local()
 
+        # Keep the connection alive so it doesn't churn every idle cycle.
+        self._start_keepalive()
+
     async def _authenticate(self, client: SharedIconaClient) -> None:
         """Authenticate the shared client via an inline UAUT access request."""
         ua = await client.open_channel("UAUT", ChannelType.UAUT)
@@ -326,6 +339,43 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _LOGGER.info("Shared CTPP opened for VIP events (%s, ts=0x%08X)", our_addr, ts)
         return ts
 
+    def _start_keepalive(self) -> None:
+        """(Re)start the periodic keepalive loop."""
+        self._cancel_keepalive()
+        self._keepalive_task = self.hass.async_create_task(
+            self._keepalive_loop(), "comelit-keepalive"
+        )
+
+    def _cancel_keepalive(self) -> None:
+        if self._keepalive_task is not None and not self._keepalive_task.done():
+            self._keepalive_task.cancel()
+        self._keepalive_task = None
+
+    async def _keepalive_loop(self) -> None:
+        """Ping the panel with a benign server-info query every _KEEPALIVE_INTERVAL.
+
+        The panel replies, resetting the receive-loop idle timer, so the shared
+        connection stays up instead of churning a reconnect every idle cycle.
+        Skipped while a video/inbound session is active (media already keeps the
+        socket busy, and we avoid opening a channel mid-call). Failures are left
+        to the receive-loop / disconnect callback to turn into a reconnect.
+        """
+        while True:
+            await asyncio.sleep(_KEEPALIVE_INTERVAL)
+            client = self._shared_client
+            if client is None or not client.connected:
+                return
+            if self.stream.session_active:
+                continue
+            try:
+                async with self._ctpp_lock:
+                    await asyncio.wait_for(client.get_server_info(), timeout=10.0)
+                _LOGGER.debug("Keepalive OK")
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("Keepalive failed — connection may be dead", exc_info=True)
+
     def _on_shared_disconnect(self) -> None:
         """Called by the shared client when its TCP connection drops.
 
@@ -341,6 +391,7 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._reconnecting:
             return
         self._reconnecting = True
+        self._cancel_keepalive()
         try:
             # Stop the video session first — it holds a reference to the dead
             # client and would otherwise hang waiting on the dead socket.
@@ -373,6 +424,7 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_stop_shared(self) -> None:
         """Disconnect the shared client (on unload)."""
+        self._cancel_keepalive()
         if self.events_manager is not None:
             with contextlib.suppress(Exception):
                 await self.events_manager.async_detach_local()
