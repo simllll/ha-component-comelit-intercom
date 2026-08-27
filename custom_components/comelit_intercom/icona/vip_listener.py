@@ -124,12 +124,18 @@ class VipEventListener:
         apt_subaddress: int,
         on_ring: Callable[[dict], None],
         init_ts: int,
+        on_inbound_ring: Callable[[str, int], None] | None = None,
     ) -> None:
         self._client = client
         self._apt = apt_address
         self._sub = apt_subaddress
         self._our_addr = f"{apt_address}{apt_subaddress}"
         self._on_ring = on_ring
+        # Optional inbound-answer hook: invoked with (entrance_addr, ring_ts)
+        # on a 0x18C0 call-init so the coordinator can answer the call and get
+        # two-way audio. When set, the CALL_INIT ACK is suppressed here so it
+        # does not race the answer sequence's own fresh_ts ACK (step 1).
+        self._on_inbound_ring = on_inbound_ring
         # All outgoing ACKs on this channel use init_ts + _VIP_ACK_TS_INCR
         # (PCAP/live-verified: never derive the ACK ts from the device's ts).
         self._init_ts = init_ts
@@ -240,9 +246,28 @@ class VipEventListener:
         if prefix == PREFIX_CALL_INIT or (
             prefix == PREFIX_VIP_EVENT and action == ACTION_IN_ALERTING
         ):
-            with contextlib.suppress(Exception):
-                await self._send_renewal_ack(addresses)
+            # For a 0x18C0 call-init with an inbound-answer hook, do NOT ACK
+            # here — the answer sequence sends its own correctly-timed fresh_ts
+            # ACK (step 1) and any ACK we send now races it and gets rejected.
+            inbound = prefix == PREFIX_CALL_INIT and self._on_inbound_ring is not None
+            if not inbound:
+                with contextlib.suppress(Exception):
+                    await self._send_renewal_ack(addresses)
             self._last_ring_mono = time.monotonic()
+            if inbound:
+                entrance_addr = _extract_caller(addresses, self._apt)
+                ring_ts = msg["timestamp"]
+                if is_verbose_logging():
+                    _LOGGER.debug(
+                        "CTPP call init: entrance=%s ring_ts=0x%08X — invoking inbound hook",
+                        entrance_addr,
+                        ring_ts,
+                    )
+                try:
+                    self._on_inbound_ring(entrance_addr, ring_ts)
+                except Exception:
+                    _LOGGER.exception("Error in inbound ring callback")
+            # Still fire the normal ring event (notification/entity update).
             self._fire(addresses, "ring", msg.get("call_tag"))
             return
 

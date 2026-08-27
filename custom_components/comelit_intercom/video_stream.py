@@ -198,6 +198,86 @@ class ComelitStreamManager:
         self._entrance = entrance
         _LOGGER.info("Live video call started to entrance %s", entrance)
 
+    # --- inbound (device-initiated ring answer) --------------------------
+
+    async def async_start_inbound(
+        self, entrance: str, ring_ts: int, renewal_ack_ts: int = 0
+    ) -> bool:
+        """Answer a device-initiated ring and start two-way media.
+
+        Mirrors the outbound _start_session flow (pause listener, reuse shared
+        client + held CTPP, hold the RTSP server) but drives the PCAP-verified
+        20-step inbound answer sequence instead of the outbound one. Returns
+        True on success.
+        """
+        async with self._lock:
+            client = self._get_shared_client()
+            if client is None or not client.connected:
+                _LOGGER.warning("Inbound: shared ICONA connection not available")
+                return False
+
+            # If a session is already up, don't stomp it.
+            if self._session is not None and self._session.active:
+                _LOGGER.debug("Inbound: a video session is already active — skipping")
+                return False
+
+            if self._server is None:
+                self._server = LocalRtspServer()
+                await self._server.start()
+
+            # Pause the doorbell listener so the answer sequence owns CTPP.
+            events = self._coordinator.events_manager
+            if events is not None:
+                with contextlib.suppress(Exception):
+                    await events.async_pause_local()
+
+            async with self._coordinator.ctpp_lock:
+                vip = self._vip() or {}
+                config = DeviceConfig(
+                    apt_address=vip.get("apt-address", ""),
+                    apt_subaddress=vip.get("apt-subaddress", 0),
+                    caller_address=entrance,
+                )
+                self._server.reset()
+                on_ring = events.handle_ring if events is not None else None
+                session = VideoCallSession(
+                    client,
+                    config,
+                    auto_timeout=True,
+                    rtsp_server=self._server,
+                    on_ring=on_ring,
+                )
+                try:
+                    await session.start_inbound(
+                        entrance, ring_ts, renewal_ack_ts=renewal_ack_ts
+                    )
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning("Inbound call answer failed: %s", err)
+                    with contextlib.suppress(Exception):
+                        await session.stop()
+                    # Hand CTPP back to the doorbell listener.
+                    if events is not None:
+                        with contextlib.suppress(Exception):
+                            await events.async_resume_local()
+                    return False
+                self._session = session
+
+            self._server.mark_ready()
+            self._entrance = entrance
+            self._touch()
+            self._arm_idle_monitor()
+            _LOGGER.info("Inbound video call answered (entrance %s)", entrance)
+            return True
+
+    async def async_answer_inbound(self) -> bool:
+        """Start two-way audio (TX) for the active inbound call."""
+        session = self._session
+        if session is None or not session.active:
+            _LOGGER.debug("answer_inbound: no active inbound session")
+            return False
+        session.answer_inbound()
+        return True
+
     async def _stop_session(self, reason: str = "", resume_listener: bool = True) -> None:
         if self._session is not None:
             _LOGGER.debug("Stopping video call (%s)", reason)
