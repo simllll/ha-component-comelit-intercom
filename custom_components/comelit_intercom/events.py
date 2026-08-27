@@ -21,7 +21,6 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
-    CONF_AUTO_ANSWER,
     DOMAIN,
     EVENT_DOORBELL,
 )
@@ -143,19 +142,20 @@ class ComelitEventsManager:
         vip = self.coordinator.vip_config or {}
         apt = vip.get("apt-address", "")
         sub = vip.get("apt-subaddress", 0)
-        # Auto-answer (inbound two-way) is opt-in and experimental: only wire
-        # the inbound hook when enabled. When off, rings are ACKed + reported
-        # exactly as before (stable), with no auto call answer.
-        auto_answer = self.entry.options.get(CONF_AUTO_ANSWER, False)
+        # Always wire the inbound hook: on every ring the coordinator runs the
+        # inbound (preview) sequence to grab a *fresh* snapshot from the panel —
+        # the same handshake the wall monitor does to show the caller. Whether
+        # it then stays connected for two-way audio is gated by `auto_answer`
+        # inside the coordinator; with auto_answer off it grabs the frame and
+        # hangs up. (The listener suppresses its own ring ACK in inbound mode so
+        # it doesn't race the sequence's ACKs; the ring event still fires.)
         listener = VipEventListener(
             client,
             apt,
             sub,
             self._handle_ring,
             init_ts=self.coordinator.ctpp_init_ts,
-            on_inbound_ring=(
-                self.coordinator._on_inbound_ring if auto_answer else None
-            ),
+            on_inbound_ring=self.coordinator._on_inbound_ring,
         )
         try:
             await listener.start()

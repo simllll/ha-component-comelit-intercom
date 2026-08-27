@@ -47,6 +47,11 @@ def signal_doorbell(entry_id: str) -> str:
     return f"{DOMAIN}_doorbell_{entry_id}"
 
 
+def signal_snapshot(entry_id: str) -> str:
+    """Dispatcher signal carrying (entrance_addr, jpeg) of a fresh on-ring still."""
+    return f"{DOMAIN}_snapshot_{entry_id}"
+
+
 class ComelitPushManager:
     """Manages FCM registration, device enrollment and the ring listener."""
 

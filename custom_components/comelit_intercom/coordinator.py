@@ -22,11 +22,13 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .comelit_client import IconaBridgeClient
 from .const import (
+    CONF_AUTO_ANSWER,
     CONF_HOST,
     CONF_PORT,
     CONF_TOKEN,
@@ -34,6 +36,8 @@ from .const import (
     DOMAIN,
     UPDATE_INTERVAL,
 )
+from .events import address_matches
+from .fcm_push import signal_snapshot
 from .icona.channels import ChannelType
 from .icona.client import IconaBridgeClient as SharedIconaClient
 from .icona.ctpp import _VIP_ACK_TS_INCR, ctpp_init_sequence
@@ -169,14 +173,41 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # --- inbound call answer (device-initiated ring) --------------------
 
-    def _on_inbound_ring(self, entrance_addr: str, ring_ts: int) -> None:
+    def _has_entrance_camera(self, addr: str) -> bool:
+        """True if *addr* is an entrance panel with a camera (in the address book).
+
+        Floor/Etagen calls come from the apartment's own address, which has no
+        camera — answering them for a snapshot just runs a doomed video
+        handshake (device never opens RTPC) and pauses the doorbell listener for
+        the whole timeout. Skip those.
+        """
+        books = (self.vip_config or {}).get("user-parameters", {})
+        return any(
+            (ent.get("apt-address") and address_matches(addr, ent["apt-address"]))
+            for ent in books.get("entrance-address-book", [])
+        )
+
+    def _on_inbound_ring(self, entrance_addr: str, ring_ts: int) -> bool:
         """Called by the VIP listener on a 0x18C0 call-init (doorbell ring).
 
-        Schedules the full 20-step inbound answer sequence as a background
-        task so it never blocks the VIP listener read loop. The ring's LE32
-        timestamp (ring_ts) is required — the answer sequence derives fresh_ts
-        from it via the device's proprietary transform.
+        Returns True if we will run the inbound answer sequence (and therefore
+        own the ring ACK); False if the listener should ACK the ring itself.
+
+        Schedules the full 20-step inbound answer sequence as a background task
+        so it never blocks the VIP listener read loop. The ring's LE32 timestamp
+        (ring_ts) is required — the answer sequence derives fresh_ts from it via
+        the device's proprietary transform.
+
+        Skipped (returns False) for callers without a camera (floor/Etagen
+        calls): there is no video to snapshot, so the sequence would only waste
+        time and hold the listener. The normal doorbell event still fires.
         """
+        if not self._has_entrance_camera(entrance_addr):
+            _LOGGER.debug(
+                "Inbound ring from %s has no camera (floor call) — skipping snapshot",
+                entrance_addr,
+            )
+            return False
         _LOGGER.debug(
             "Inbound ring: entrance=%s ring_ts=0x%08X", entrance_addr, ring_ts
         )
@@ -185,6 +216,7 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.async_start_inbound_video(entrance_addr, ring_ts),
             "comelit-inbound-video",
         )
+        return True
 
     async def async_start_inbound_video(
         self, entrance_addr: str, ring_ts: int
@@ -199,10 +231,27 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Renewal ACK ts the device expects during the call — same increment the
         # VIP listener uses for its keepalive ACKs (init_ts + 0x01010000).
         renewal_ack_ts = (self._ctpp_init_ts + _VIP_ACK_TS_INCR) & 0xFFFFFFFF
+        auto_answer = self.entry.options.get(CONF_AUTO_ANSWER, False)
+        ring_at = self.hass.loop.time()
         try:
-            await self.stream.async_start_inbound(
+            ok = await self.stream.async_start_inbound(
                 entrance_addr, ring_ts, renewal_ack_ts=renewal_ack_ts
             )
+            if not ok:
+                return
+            # Grab a fresh still from the preview and hand it to the camera so
+            # a ring notification can attach a current image (the outbound
+            # snapshot path conflicts with the busy, ringing panel).
+            jpeg = await self.stream.async_grab_snapshot()
+            if jpeg:
+                async_dispatcher_send(
+                    self.hass, signal_snapshot(self.entry.entry_id), entrance_addr, jpeg
+                )
+            # Snapshot-only preview: unless the user opted into auto-answer
+            # (staying connected for two-way audio), release the call — but not
+            # if someone opened a live view in the meantime (shared session).
+            if not auto_answer:
+                await self.stream.async_release_after_snapshot(ring_at)
         except Exception:  # noqa: BLE001
             _LOGGER.warning("Inbound video answer failed", exc_info=True)
 

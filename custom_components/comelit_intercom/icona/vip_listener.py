@@ -124,7 +124,7 @@ class VipEventListener:
         apt_subaddress: int,
         on_ring: Callable[[dict], None],
         init_ts: int,
-        on_inbound_ring: Callable[[str, int], None] | None = None,
+        on_inbound_ring: Callable[[str, int], bool] | None = None,
     ) -> None:
         self._client = client
         self._apt = apt_address
@@ -132,9 +132,11 @@ class VipEventListener:
         self._our_addr = f"{apt_address}{apt_subaddress}"
         self._on_ring = on_ring
         # Optional inbound-answer hook: invoked with (entrance_addr, ring_ts)
-        # on a 0x18C0 call-init so the coordinator can answer the call and get
-        # two-way audio. When set, the CALL_INIT ACK is suppressed here so it
-        # does not race the answer sequence's own fresh_ts ACK (step 1).
+        # on a 0x18C0 call-init so the coordinator can answer the call and get a
+        # snapshot / two-way audio. It returns True when it will run the answer
+        # sequence (which sends its own fresh_ts ACK — so the CALL_INIT ACK is
+        # suppressed here to avoid racing it); False (e.g. a camera-less floor
+        # call) means we ACK the ring here as usual.
         self._on_inbound_ring = on_inbound_ring
         # All outgoing ACKs on this channel use init_ts + _VIP_ACK_TS_INCR
         # (PCAP/live-verified: never derive the ACK ts from the device's ts).
@@ -246,15 +248,14 @@ class VipEventListener:
         if prefix == PREFIX_CALL_INIT or (
             prefix == PREFIX_VIP_EVENT and action == ACTION_IN_ALERTING
         ):
-            # For a 0x18C0 call-init with an inbound-answer hook, do NOT ACK
-            # here — the answer sequence sends its own correctly-timed fresh_ts
-            # ACK (step 1) and any ACK we send now races it and gets rejected.
-            inbound = prefix == PREFIX_CALL_INIT and self._on_inbound_ring is not None
-            if not inbound:
-                with contextlib.suppress(Exception):
-                    await self._send_renewal_ack(addresses)
-            self._last_ring_mono = time.monotonic()
-            if inbound:
+            # For a 0x18C0 call-init with an inbound-answer hook, invoke it
+            # first: it returns True if it will run the answer sequence (which
+            # sends its own correctly-timed fresh_ts ACK, so we must NOT ACK
+            # here or the two race and get rejected). It returns False for a
+            # caller with no camera (floor/Etagen call) — then we ACK the ring
+            # normally so the device doesn't keep retransmitting.
+            handled_inbound = False
+            if prefix == PREFIX_CALL_INIT and self._on_inbound_ring is not None:
                 entrance_addr = _extract_caller(addresses, self._apt)
                 ring_ts = msg["timestamp"]
                 if is_verbose_logging():
@@ -264,9 +265,13 @@ class VipEventListener:
                         ring_ts,
                     )
                 try:
-                    self._on_inbound_ring(entrance_addr, ring_ts)
+                    handled_inbound = bool(self._on_inbound_ring(entrance_addr, ring_ts))
                 except Exception:
                     _LOGGER.exception("Error in inbound ring callback")
+            if not handled_inbound:
+                with contextlib.suppress(Exception):
+                    await self._send_renewal_ack(addresses)
+            self._last_ring_mono = time.monotonic()
             # Still fire the normal ring event (notification/entity update).
             self._fire(addresses, "ring", msg.get("call_tag"))
             return

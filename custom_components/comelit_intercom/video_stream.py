@@ -78,6 +78,10 @@ class ComelitStreamManager:
         self._lock = asyncio.Lock()
         self._idle_task: asyncio.Task | None = None
         self._last_use = 0.0
+        # Loop time of the last live-view (stream_source) request — distinct
+        # from _last_use (which snapshots also bump). Used to avoid dropping a
+        # snapshot-only preview call out from under a concurrent live viewer.
+        self._last_stream_request = 0.0
 
     def _touch(self) -> None:
         self._last_use = self.hass.loop.time()
@@ -92,6 +96,7 @@ class ComelitStreamManager:
                 await self._stop_session("start failure")
                 return None
             self._touch()
+            self._last_stream_request = self.hass.loop.time()
             url = self._server.rtsp_url if self._server else None
             _LOGGER.debug("stream_source(%s) -> %s", entrance, url)
             return url
@@ -277,6 +282,54 @@ class ComelitStreamManager:
             return False
         session.answer_inbound()
         return True
+
+    async def async_grab_snapshot(self) -> bytes | None:
+        """Grab one JPEG from the currently-active session's receiver.
+
+        Used by the on-ring snapshot: after `async_start_inbound` has the
+        preview video flowing, pull a frame without opening a second call.
+        """
+        rx = self._session.rtp_receiver if self._session else None
+        if rx is None:
+            return None
+        try:
+            jpeg = await rx.get_jpeg_frame(timeout=_SNAPSHOT_TIMEOUT)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("On-ring snapshot decode failed: %s", err)
+            return None
+        if jpeg:
+            self._touch()
+            _LOGGER.debug("On-ring snapshot: %d byte JPEG", len(jpeg))
+        return jpeg
+
+    async def async_release_after_snapshot(
+        self, ring_at: float, grace: float = 6.0
+    ) -> None:
+        """Drop a snapshot-only preview call — unless someone is watching.
+
+        A live view shares this single session, so we must not cut it off.
+        Waits a short grace for a concurrent live view to attach; if a viewer
+        is present, or any ``stream_source`` was requested after the ring, the
+        call is left for the idle monitor to reap. The final decision is made
+        under the lock (which ``stream_source`` also holds) so it can't race a
+        viewer that attaches at the last moment.
+        """
+        loop = self.hass.loop
+        deadline = loop.time() + grace
+        while loop.time() < deadline:
+            server = self._server
+            if (server is not None and server.client_count > 0) or (
+                self._last_stream_request > ring_at
+            ):
+                return
+            await asyncio.sleep(0.5)
+        async with self._lock:
+            server = self._server
+            if server is None or server.client_count > 0:
+                return
+            if self._last_stream_request > ring_at:
+                return
+            await self._stop_session("on-ring snapshot done")
 
     async def _stop_session(self, reason: str = "", resume_listener: bool = True) -> None:
         if self._session is not None:
