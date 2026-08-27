@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.13.0](https://github.com/simllll/hass-comelit-icona/compare/v1.12.0...v1.13.0) (2026-08-27)
+
+
+### Features
+
+* fresh on-ring snapshot from the inbound preview call ([#60](https://github.com/simllll/hass-comelit-icona/issues/60)) ([5a87e8c](https://github.com/simllll/hass-comelit-icona/commit/5a87e8caf32b57dc2f657c4f972c79e68ef30247))
+
 ## [1.12.0](https://github.com/simllll/hass-comelit-icona/compare/v1.11.1...v1.12.0) (2026-08-27)
 
 
