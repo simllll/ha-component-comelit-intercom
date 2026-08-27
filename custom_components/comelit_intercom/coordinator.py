@@ -203,6 +203,7 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # VIP listener uses for its keepalive ACKs (init_ts + 0x01010000).
         renewal_ack_ts = (self._ctpp_init_ts + _VIP_ACK_TS_INCR) & 0xFFFFFFFF
         auto_answer = self.entry.options.get(CONF_AUTO_ANSWER, False)
+        ring_at = self.hass.loop.time()
         try:
             ok = await self.stream.async_start_inbound(
                 entrance_addr, ring_ts, renewal_ack_ts=renewal_ack_ts
@@ -218,9 +219,10 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self.hass, signal_snapshot(self.entry.entry_id), entrance_addr, jpeg
                 )
             # Snapshot-only preview: unless the user opted into auto-answer
-            # (staying connected for two-way audio), hang up now.
+            # (staying connected for two-way audio), release the call — but not
+            # if someone opened a live view in the meantime (shared session).
             if not auto_answer:
-                await self.stream.async_hangup("on-ring snapshot done")
+                await self.stream.async_release_after_snapshot(ring_at)
         except Exception:  # noqa: BLE001
             _LOGGER.warning("Inbound video answer failed", exc_info=True)
 
