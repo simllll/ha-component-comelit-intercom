@@ -278,6 +278,30 @@ class ComelitStreamManager:
         session.answer_inbound()
         return True
 
+    async def async_grab_snapshot(self) -> bytes | None:
+        """Grab one JPEG from the currently-active session's receiver.
+
+        Used by the on-ring snapshot: after `async_start_inbound` has the
+        preview video flowing, pull a frame without opening a second call.
+        """
+        rx = self._session.rtp_receiver if self._session else None
+        if rx is None:
+            return None
+        try:
+            jpeg = await rx.get_jpeg_frame(timeout=_SNAPSHOT_TIMEOUT)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("On-ring snapshot decode failed: %s", err)
+            return None
+        if jpeg:
+            self._touch()
+            _LOGGER.debug("On-ring snapshot: %d byte JPEG", len(jpeg))
+        return jpeg
+
+    async def async_hangup(self, reason: str = "") -> None:
+        """Stop the active session (e.g. after a snapshot-only preview)."""
+        async with self._lock:
+            await self._stop_session(reason or "hangup")
+
     async def _stop_session(self, reason: str = "", resume_listener: bool = True) -> None:
         if self._session is not None:
             _LOGGER.debug("Stopping video call (%s)", reason)

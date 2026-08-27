@@ -22,11 +22,13 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .comelit_client import IconaBridgeClient
 from .const import (
+    CONF_AUTO_ANSWER,
     CONF_HOST,
     CONF_PORT,
     CONF_TOKEN,
@@ -34,6 +36,7 @@ from .const import (
     DOMAIN,
     UPDATE_INTERVAL,
 )
+from .fcm_push import signal_snapshot
 from .icona.channels import ChannelType
 from .icona.client import IconaBridgeClient as SharedIconaClient
 from .icona.ctpp import _VIP_ACK_TS_INCR, ctpp_init_sequence
@@ -199,10 +202,25 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Renewal ACK ts the device expects during the call — same increment the
         # VIP listener uses for its keepalive ACKs (init_ts + 0x01010000).
         renewal_ack_ts = (self._ctpp_init_ts + _VIP_ACK_TS_INCR) & 0xFFFFFFFF
+        auto_answer = self.entry.options.get(CONF_AUTO_ANSWER, False)
         try:
-            await self.stream.async_start_inbound(
+            ok = await self.stream.async_start_inbound(
                 entrance_addr, ring_ts, renewal_ack_ts=renewal_ack_ts
             )
+            if not ok:
+                return
+            # Grab a fresh still from the preview and hand it to the camera so
+            # a ring notification can attach a current image (the outbound
+            # snapshot path conflicts with the busy, ringing panel).
+            jpeg = await self.stream.async_grab_snapshot()
+            if jpeg:
+                async_dispatcher_send(
+                    self.hass, signal_snapshot(self.entry.entry_id), entrance_addr, jpeg
+                )
+            # Snapshot-only preview: unless the user opted into auto-answer
+            # (staying connected for two-way audio), hang up now.
+            if not auto_answer:
+                await self.stream.async_hangup("on-ring snapshot done")
         except Exception:  # noqa: BLE001
             _LOGGER.warning("Inbound video answer failed", exc_info=True)
 
