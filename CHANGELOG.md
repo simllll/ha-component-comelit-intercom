@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.12.0](https://github.com/simllll/hass-comelit-icona/compare/v1.11.1...v1.12.0) (2026-08-27)
+
+
+### Features
+
+* two-way audio + video coexistence via ONVIF backchannel ([#57](https://github.com/simllll/hass-comelit-icona/issues/57)) ([b1c3380](https://github.com/simllll/hass-comelit-icona/commit/b1c3380959a913315561d6270fabf6a0027bb43b))
+
 ## [1.11.1](https://github.com/simllll/hass-comelit-icona/compare/v1.11.0...v1.11.1) (2026-08-27)
 
 
