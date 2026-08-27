@@ -39,7 +39,7 @@ import socket
 import struct
 import time
 
-from .const import is_audio_enabled, is_verbose_logging
+from .const import is_audio_enabled, is_talkback_enabled, is_verbose_logging
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -599,22 +599,26 @@ class LocalRtspServer:
         # two-way/unmute control. Gated by the "enable_audio" option so users
         # who hit HLS/video trouble can drop the track entirely.
         if is_audio_enabled():
+            # Forward audio (entrance → browser). Single, plain audio track —
+            # this is the known-good SDP that go2rtc streams reliably.
             sdp += (
-                # Forward audio (entrance → browser).
                 "m=audio 0 RTP/AVP 8\r\n"
                 "c=IN IP4 0.0.0.0\r\n"
                 "a=rtpmap:8 PCMA/8000\r\n"
-                "a=sendonly\r\n"
                 "a=control:audio\r\n"
-                # Backchannel (browser mic → entrance). go2rtc SETUPs this and
-                # streams the mic via ANNOUNCE/RECORD; we forward it to the
-                # device. recvonly = the server receives on this track.
-                "m=audio 0 RTP/AVP 8\r\n"
-                "c=IN IP4 0.0.0.0\r\n"
-                "a=rtpmap:8 PCMA/8000\r\n"
-                "a=recvonly\r\n"
-                "a=control:backchannel\r\n"
             )
+            # Backchannel (browser mic → entrance) — ONLY when talk-back is
+            # enabled. A second same-payload (PCMA) audio m-line confuses
+            # go2rtc's track mapping and breaks the whole stream, so it must
+            # not be advertised on the default view path.
+            if is_talkback_enabled():
+                sdp += (
+                    "m=audio 0 RTP/AVP 8\r\n"
+                    "c=IN IP4 0.0.0.0\r\n"
+                    "a=rtpmap:8 PCMA/8000\r\n"
+                    "a=recvonly\r\n"
+                    "a=control:backchannel\r\n"
+                )
         return sdp
 
     async def _wait_for_teardown(self, reader: asyncio.StreamReader) -> None:

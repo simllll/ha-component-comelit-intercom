@@ -9,6 +9,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    CONF_AUTO_ANSWER,
     CONF_ENABLE_AUDIO,
     CONF_ENABLE_NOTIFICATIONS,
     CONF_VERBOSE_LOGGING,
@@ -16,7 +17,11 @@ from .const import (
 )
 from .coordinator import ComelitDataUpdateCoordinator
 from .events import ComelitEventsManager
-from .icona.const import set_audio_enabled, set_verbose_logging
+from .icona.const import (
+    set_audio_enabled,
+    set_talkback_enabled,
+    set_verbose_logging,
+)
 from .test_service import SERVICE_TEST_CONNECTION, async_setup_test_service
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,6 +43,7 @@ async def _async_update_options(hass: HomeAssistant, entry: ComelitConfigEntry) 
     """Apply options that can change at runtime (verbose logging, audio)."""
     set_verbose_logging(entry.options.get(CONF_VERBOSE_LOGGING, False))
     set_audio_enabled(entry.options.get(CONF_ENABLE_AUDIO, True))
+    set_talkback_enabled(entry.options.get(CONF_AUTO_ANSWER, False))
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ComelitConfigEntry) -> bool:
@@ -46,6 +52,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ComelitConfigEntry) -> b
     # toggle per the options.
     set_verbose_logging(entry.options.get(CONF_VERBOSE_LOGGING, False))
     set_audio_enabled(entry.options.get(CONF_ENABLE_AUDIO, True))
+    set_talkback_enabled(entry.options.get(CONF_AUTO_ANSWER, False))
     entry.async_on_unload(entry.add_update_listener(_async_update_options))
 
     coordinator = ComelitDataUpdateCoordinator(hass, entry)
