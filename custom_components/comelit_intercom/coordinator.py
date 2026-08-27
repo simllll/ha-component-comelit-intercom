@@ -340,10 +340,15 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return ts
 
     def _start_keepalive(self) -> None:
-        """(Re)start the periodic keepalive loop."""
+        """(Re)start the periodic keepalive loop.
+
+        A *background* task so HA's startup bootstrap doesn't wait on this
+        never-ending loop (a tracked task makes bootstrap time out with a
+        "blocking startup" warning before moving on).
+        """
         self._cancel_keepalive()
-        self._keepalive_task = self.hass.async_create_task(
-            self._keepalive_loop(), "comelit-keepalive"
+        self._keepalive_task = self.entry.async_create_background_task(
+            self.hass, self._keepalive_loop(), "comelit-keepalive"
         )
 
     def _cancel_keepalive(self) -> None:
