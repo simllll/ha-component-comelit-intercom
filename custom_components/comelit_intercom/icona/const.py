@@ -37,25 +37,6 @@ def set_audio_enabled(enabled: bool) -> None:
     global _audio_enabled
     _audio_enabled = enabled
 
-
-# Talk-back (mic → entrance) advertised in the SDP as a second, recvonly PCMA
-# track. Off by default: a second same-payload audio m-line confuses go2rtc's
-# track mapping and breaks the whole stream, so it's only advertised when
-# two-way answering is enabled. Tied to the auto_answer option.
-_talkback_enabled: bool = False
-
-
-def is_talkback_enabled() -> bool:
-    """Return True when the RTSP SDP should advertise the mic backchannel."""
-    return _talkback_enabled
-
-
-def set_talkback_enabled(enabled: bool) -> None:
-    """Set the talk-back flag (called on setup and options reload)."""
-    global _talkback_enabled
-    _talkback_enabled = enabled
-
-
 DEFAULT_PORT = 64100
 DEFAULT_HTTP_PORT = 8080
 
