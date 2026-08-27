@@ -233,7 +233,7 @@ class VipEventListener:
 
         # Device's periodic registration renewal → answer with ACK pair.
         if prefix == PREFIX_VIP_EVENT and action == ACTION_REGISTRATION_RENEWAL:
-            await self._send_renewal_ack()
+            await self._send_renewal_ack(addresses)
             return
 
         # Ring: 0x18C0 (call init) or 0x1860/0x0001 (IN_ALERTING).
@@ -241,7 +241,7 @@ class VipEventListener:
             prefix == PREFIX_VIP_EVENT and action == ACTION_IN_ALERTING
         ):
             with contextlib.suppress(Exception):
-                await self._send_renewal_ack()
+                await self._send_renewal_ack(addresses)
             self._last_ring_mono = time.monotonic()
             self._fire(addresses, "ring", msg.get("call_tag"))
             return
@@ -259,17 +259,48 @@ class VipEventListener:
                 )
             return
 
-    async def _send_renewal_ack(self) -> None:
-        """Send the ACK pair (0x1800 + 0x1820) using init_ts + 0x01010000."""
+    def _resolve_ack_addresses(self, addresses: list[str]) -> tuple[str, str]:
+        """Derive caller/callee for a renewal ACK from the message's own addresses.
+
+        The device embeds its own binary VIP address in the renewal, which can
+        DIFFER from the apt-address the JSON config API returns (e.g. binary
+        SB000003 vs config SB000006). If we ACK with the config address the
+        device rejects it and stops pushing events, dropping the connection
+        every renewal cycle (~120s). The full address (base + subaddress digit)
+        appears twice and the base once, so we return (caller=full, callee=base),
+        falling back to the config addresses when the shape doesn't match.
+        """
+        if len(addresses) >= 2:
+            counts = {a: addresses.count(a) for a in set(addresses)}
+            repeated = [a for a, n in counts.items() if n >= 2]
+            solo = [a for a, n in counts.items() if n == 1]
+            if repeated and solo:
+                return repeated[0], solo[0]
+            sorted_unique = sorted(set(addresses), key=len, reverse=True)
+            if len(sorted_unique) >= 2:
+                return sorted_unique[0], sorted_unique[-1]
+        return self._our_addr, self._apt
+
+    async def _send_renewal_ack(self, addresses: list[str] | None = None) -> None:
+        """Send the ACK pair (0x1800 + 0x1820) using init_ts + 0x01010000.
+
+        Addresses are resolved from the renewal message itself when available,
+        since the device's binary VIP address may differ from config.
+        """
+        caller, callee = (
+            self._resolve_ack_addresses(addresses)
+            if addresses
+            else (self._our_addr, self._apt)
+        )
         try:
             await self._client.send_binary(
                 self._channel,
-                encode_call_response_ack(self._our_addr, self._apt, self._ack_ts),
+                encode_call_response_ack(caller, callee, self._ack_ts),
             )
             await self._client.send_binary(
                 self._channel,
                 encode_call_response_ack(
-                    self._our_addr, self._apt, self._ack_ts, prefix=PREFIX_CONFIRM
+                    caller, callee, self._ack_ts, prefix=PREFIX_CONFIRM
                 ),
             )
             if is_verbose_logging():
