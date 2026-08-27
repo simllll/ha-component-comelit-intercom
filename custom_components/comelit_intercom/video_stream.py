@@ -83,6 +83,11 @@ class ComelitStreamManager:
         # snapshot-only preview call out from under a concurrent live viewer.
         self._last_stream_request = 0.0
 
+    @property
+    def session_active(self) -> bool:
+        """True while a video/inbound session holds the shared connection."""
+        return self._session is not None and self._session.active
+
     def _touch(self) -> None:
         self._last_use = self.hass.loop.time()
 
