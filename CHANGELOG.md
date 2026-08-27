@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.11.1](https://github.com/simllll/hass-comelit-icona/compare/v1.11.0...v1.11.1) (2026-08-27)
+
+
+### Bug Fixes
+
+* gate mic-backchannel SDP behind auto_answer (unbreaks 1.11.0 video) ([#55](https://github.com/simllll/hass-comelit-icona/issues/55)) ([bfc532d](https://github.com/simllll/hass-comelit-icona/commit/bfc532df9369ab59eb0cdc3296a39d1d152b7535))
+
 ## [1.11.0](https://github.com/simllll/hass-comelit-icona/compare/v1.10.1...v1.11.0) (2026-08-27)
 
 
