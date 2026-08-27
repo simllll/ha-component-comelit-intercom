@@ -36,6 +36,7 @@ from .const import (
     DOMAIN,
     UPDATE_INTERVAL,
 )
+from .events import address_matches
 from .fcm_push import signal_snapshot
 from .icona.channels import ChannelType
 from .icona.client import IconaBridgeClient as SharedIconaClient
@@ -172,14 +173,41 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # --- inbound call answer (device-initiated ring) --------------------
 
-    def _on_inbound_ring(self, entrance_addr: str, ring_ts: int) -> None:
+    def _has_entrance_camera(self, addr: str) -> bool:
+        """True if *addr* is an entrance panel with a camera (in the address book).
+
+        Floor/Etagen calls come from the apartment's own address, which has no
+        camera — answering them for a snapshot just runs a doomed video
+        handshake (device never opens RTPC) and pauses the doorbell listener for
+        the whole timeout. Skip those.
+        """
+        books = (self.vip_config or {}).get("user-parameters", {})
+        return any(
+            (ent.get("apt-address") and address_matches(addr, ent["apt-address"]))
+            for ent in books.get("entrance-address-book", [])
+        )
+
+    def _on_inbound_ring(self, entrance_addr: str, ring_ts: int) -> bool:
         """Called by the VIP listener on a 0x18C0 call-init (doorbell ring).
 
-        Schedules the full 20-step inbound answer sequence as a background
-        task so it never blocks the VIP listener read loop. The ring's LE32
-        timestamp (ring_ts) is required — the answer sequence derives fresh_ts
-        from it via the device's proprietary transform.
+        Returns True if we will run the inbound answer sequence (and therefore
+        own the ring ACK); False if the listener should ACK the ring itself.
+
+        Schedules the full 20-step inbound answer sequence as a background task
+        so it never blocks the VIP listener read loop. The ring's LE32 timestamp
+        (ring_ts) is required — the answer sequence derives fresh_ts from it via
+        the device's proprietary transform.
+
+        Skipped (returns False) for callers without a camera (floor/Etagen
+        calls): there is no video to snapshot, so the sequence would only waste
+        time and hold the listener. The normal doorbell event still fires.
         """
+        if not self._has_entrance_camera(entrance_addr):
+            _LOGGER.debug(
+                "Inbound ring from %s has no camera (floor call) — skipping snapshot",
+                entrance_addr,
+            )
+            return False
         _LOGGER.debug(
             "Inbound ring: entrance=%s ring_ts=0x%08X", entrance_addr, ring_ts
         )
@@ -188,6 +216,7 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.async_start_inbound_video(entrance_addr, ring_ts),
             "comelit-inbound-video",
         )
+        return True
 
     async def async_start_inbound_video(
         self, entrance_addr: str, ring_ts: int
