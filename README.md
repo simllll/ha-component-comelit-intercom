@@ -28,8 +28,13 @@ for ring notifications).
     falls back to Comelit's cloud push (FCM). An **Events source** sensor shows
     `local` / `cloud` / `none`.
 - 🎥 **Entrance camera** — live video plus stills, decoded locally from the
-  intercom's own H.264 video. The still **refreshes automatically on that
-  entrance's ring**, so automations can attach a fresh image to a notification.
+  intercom's own H.264 video, with the entrance's audio on the WebRTC view. The
+  still **refreshes automatically on that entrance's ring**, so automations can
+  attach a fresh image to a notification.
+- 🎙️ **Two-way audio (talk-back)** — hear the entrance and talk back from the
+  browser over go2rtc's WebRTC. Answer an incoming call automatically
+  (`Auto-answer`) or with the **Answer doorbell** button, then use the mic
+  button on a WebRTC card. Opt-in; off by default.
 - 🔑 **Dedicated identity** — use a Home Assistant user paired via the app so it
   doesn't clash with your phone or the wall monitor (needed for local events).
 - 📈 **Sensors** — connectivity, ringing, last ring, ring count, events source.
@@ -136,6 +141,21 @@ locally from the intercom's H.264 video:
   notification. You can also request a still any time (e.g. `camera.snapshot`);
   it's taken from a short video call to the panel.
 
+### Audio & two-way talk-back
+
+Audio is carried as G.711 (PCMA) and only survives the **WebRTC** stream — HLS
+drops it. Home Assistant's built-in **go2rtc** relays it to the browser, so make
+sure the camera plays over WebRTC (a WebRTC/Picture card, or the more-info
+dialog on a recent HA).
+
+- **Hear the entrance** works on the plain live view (best-effort; some models
+  only send audio once a call is answered).
+- **Talk back** needs an **answered call**: enable **Auto-answer** in the options
+  (or press the **Answer doorbell** button while it's ringing). Then the mic
+  button appears on the WebRTC card and your voice is sent to the entrance over
+  go2rtc's ONVIF backchannel. The browser only grants microphone access on a
+  **secure (HTTPS) origin**.
+
 Example — notify with a snapshot on ring:
 
 ```yaml
@@ -156,6 +176,12 @@ automation:
 
 Integration → **Configure**:
 - **Doorbell ring notifications** — enable/disable.
+- **Enable audio** — advertise the entrance audio track on the stream (on by
+  default). Turn off if a client has trouble with the G.711 audio.
+- **Auto-answer doorbell** — automatically answer an incoming call so two-way
+  audio (talk-back) is available. Experimental, off by default; on shared /
+  multi-unit systems it can affect other units.
+- **Verbose debug logging** — log protocol/video/audio internals for bug reports.
 - **Push identity token** — advanced: enroll cloud push under a different token.
 
 ## Limitations
@@ -167,8 +193,10 @@ Integration → **Configure**:
   state feedback, hence `lock` entities that "open".
 - **One video call at a time** — the intercom serves a single call, so live view
   and stills share it. Continuous live view may occasionally drop and reconnect.
-- **Video only (no two-way audio yet)** — receiving the entrance's audio/video
-  works; talking back is not implemented.
+- **Audio needs WebRTC** — the entrance audio and talk-back only work on the
+  WebRTC stream (via go2rtc); HLS players show video only. Talk-back also needs
+  an answered call (auto-answer or the Answer button) and an HTTPS origin for the
+  browser mic.
 
 ## Credits
 
