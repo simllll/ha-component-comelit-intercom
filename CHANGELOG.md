@@ -4,6 +4,19 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.11.0](https://github.com/simllll/hass-comelit-icona/compare/v1.10.1...v1.11.0) (2026-08-27)
+
+
+### Features
+
+* inbound call answer + two-way audio (ported from mnestrud fork) ([#51](https://github.com/simllll/hass-comelit-icona/issues/51)) ([55502fe](https://github.com/simllll/hass-comelit-icona/commit/55502fe7935e45d1198763ee997f734ab75c58f6))
+
+
+### Bug Fixes
+
+* peer/TAP door opening for 1456S (opendoor-action "peer") ([#52](https://github.com/simllll/hass-comelit-icona/issues/52)) ([22d2207](https://github.com/simllll/hass-comelit-icona/commit/22d2207cf0a269b20eabde6c1b3e10b21a880eb3))
+* resolve renewal-ACK addresses from the message, not config ([#54](https://github.com/simllll/hass-comelit-icona/issues/54)) ([c65f6dc](https://github.com/simllll/hass-comelit-icona/commit/c65f6dcb0de7df040e5ec9734a6fdfa9bcf5fcc0))
+
 ## [1.10.1](https://github.com/simllll/hass-comelit-icona/compare/v1.10.0...v1.10.1) (2026-08-25)
 
 
