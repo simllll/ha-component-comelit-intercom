@@ -505,27 +505,33 @@ class IconaBridgeClient:
         ch = self._channels.get(name)
         return ch if ch is not None and ch.is_open else None
 
-    async def get_server_info(self) -> dict | None:
-        """Query server-info and return the reply (or None).
+    async def server_info_keepalive(self) -> dict | None:
+        """Benign server-info probe used as a connection keepalive.
 
-        Used as a benign connection keepalive: the panel replies with a JSON
-        packet, which resets the receive-loop idle timer. No side effects (unlike
-        push-info, which re-enrolls the cloud-push token). Opens a short-lived
-        INFO channel, queries, and closes it.
+        The panel replies with a JSON packet, resetting the receive-loop idle
+        timer, so the connection doesn't go idle-dead. No side effects (unlike
+        push-info, which re-enrolls the cloud-push token).
+
+        Reuses a single long-lived INFO channel for the connection's lifetime
+        instead of opening+closing one per probe — thousands of open/close
+        cycles on one persistent connection appears to degrade the panel over
+        time (it starts dropping connections). The channel dies with the
+        connection; the next probe after a reconnect reopens it lazily. Raises
+        on a dead connection so the caller can force a reconnect.
         """
-        channel = await self.open_channel("INFO_KA", ChannelType.INFO, wire_name="INFO")
-        try:
-            return await self.send_json(
-                channel,
-                {
-                    "message": "server-info",
-                    "message-type": "request",
-                    "message-id": int(ViperMessageId.SERVER_INFO),
-                },
+        channel = self.get_channel("INFO_KA")
+        if channel is None:
+            channel = await self.open_channel(
+                "INFO_KA", ChannelType.INFO, wire_name="INFO"
             )
-        finally:
-            with contextlib.suppress(Exception):
-                await self.close_channel("INFO_KA")
+        return await self.send_json(
+            channel,
+            {
+                "message": "server-info",
+                "message-type": "request",
+                "message-id": int(ViperMessageId.SERVER_INFO),
+            },
+        )
 
     def set_push_callback(self, callback: Callable[[dict], None] | None) -> None:
         """Set a callback for push notifications (unsolicited JSON messages)."""

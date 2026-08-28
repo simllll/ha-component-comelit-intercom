@@ -48,6 +48,10 @@ _LOGGER = logging.getLogger(__name__)
 # Keepalive cadence — well under the client's 300s idle timeout and the panel's
 # ~120s renewal cycle, so the connection never goes idle-dead when nothing rings.
 _KEEPALIVE_INTERVAL = 90
+# Reconnect backoff bounds — the panel can be unreachable/degraded for a while
+# (network blip, reboot); we keep retrying (5s → … → 60s cap) until it's back.
+_RECONNECT_BACKOFF_START = 5
+_RECONNECT_BACKOFF_MAX = 60
 
 
 class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -79,6 +83,8 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # replying (resets the idle timer) — the same benign query the app
         # sends, with no push-enrollment side effect.
         self._keepalive_task: asyncio.Task[None] | None = None
+        # Set on entry unload so the (now indefinite) reconnect loop stops.
+        self._shutdown = False
 
         # Live-video/snapshot manager reuses the shared connection's CTPP.
         self.stream = ComelitStreamManager(
@@ -274,8 +280,19 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         Idempotent-ish: safe to call at setup. Also (re)starts the doorbell
         VIP listener via the events manager once CTPP is up.
+
+        If the very first connect fails (e.g. the panel is still degraded when
+        HA restarts to recover), fall into the indefinite reconnect loop rather
+        than giving up — otherwise the connection stays dead until the next
+        restart.
         """
-        await self._connect_shared()
+        try:
+            await self._connect_shared()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "Initial shared connect failed (%s) — entering reconnect loop", err
+            )
+            self.hass.async_create_task(self._reconnect_shared())
 
     async def _connect_shared(self) -> None:
         """(Re)establish the shared client, open CTPP+CSPB, run init."""
@@ -360,10 +377,13 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Ping the panel with a benign server-info query every _KEEPALIVE_INTERVAL.
 
         The panel replies, resetting the receive-loop idle timer, so the shared
-        connection stays up instead of churning a reconnect every idle cycle.
-        Skipped while a video/inbound session is active (media already keeps the
-        socket busy, and we avoid opening a channel mid-call). Failures are left
-        to the receive-loop / disconnect callback to turn into a reconnect.
+        connection stays up instead of churning a reconnect every idle cycle. The
+        probe reuses a single long-lived INFO channel (no per-probe open/close
+        churn). Skipped while a video/inbound session is active (media already
+        keeps the socket busy). On failure it actively triggers a reconnect
+        rather than assuming the receive loop will — a half-open socket can leave
+        the receive loop blocked while the panel silently stopped delivering
+        rings, so the keepalive is the health check that recovers it.
         """
         while True:
             await asyncio.sleep(_KEEPALIVE_INTERVAL)
@@ -374,12 +394,14 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 continue
             try:
                 async with self._ctpp_lock:
-                    await asyncio.wait_for(client.get_server_info(), timeout=10.0)
+                    await asyncio.wait_for(client.server_info_keepalive(), timeout=10.0)
                 _LOGGER.debug("Keepalive OK")
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
-                _LOGGER.debug("Keepalive failed — connection may be dead", exc_info=True)
+                _LOGGER.warning("Keepalive failed — forcing reconnect", exc_info=True)
+                self._on_shared_disconnect()
+                return
 
     def _on_shared_disconnect(self) -> None:
         """Called by the shared client when its TCP connection drops.
@@ -413,22 +435,41 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 with contextlib.suppress(Exception):
                     await old.disconnect()
 
-            # Retry connect a few times — the device may still be waking up.
-            for attempt in range(4):
+            # Retry indefinitely with backoff. The panel can be unreachable or
+            # degraded (dropping connections) for a while — e.g. after a network
+            # blip or a reboot — and we must keep trying until it comes back
+            # instead of giving up and leaving a permanently dead connection
+            # (which silently loses rings until HA restarts). Stops only on
+            # entry unload (_shutdown).
+            backoff = _RECONNECT_BACKOFF_START
+            attempt = 0
+            while not self._shutdown:
+                attempt += 1
                 try:
                     await self._connect_shared()
-                    _LOGGER.info("Shared connection re-established")
+                    _LOGGER.info("Shared connection re-established (after %d attempt(s))", attempt)
                     return
                 except Exception as err:  # noqa: BLE001
-                    if attempt >= 3:
-                        _LOGGER.warning("Shared reconnect failed: %s", err)
-                        return
-                    await asyncio.sleep(2)
+                    # Drop any half-open client from the failed attempt.
+                    partial = self._shared_client
+                    self._shared_client = None
+                    if partial is not None:
+                        with contextlib.suppress(Exception):
+                            await partial.disconnect()
+                    _LOGGER.warning(
+                        "Shared reconnect attempt %d failed (retry in %ds): %s",
+                        attempt,
+                        backoff,
+                        err,
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, _RECONNECT_BACKOFF_MAX)
         finally:
             self._reconnecting = False
 
     async def async_stop_shared(self) -> None:
         """Disconnect the shared client (on unload)."""
+        self._shutdown = True
         self._cancel_keepalive()
         if self.events_manager is not None:
             with contextlib.suppress(Exception):
