@@ -4,6 +4,13 @@ This file is maintained automatically by
 [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commit](https://www.conventionalcommits.org/) messages.
 
+## [1.13.2](https://github.com/simllll/hass-comelit-icona/compare/v1.13.1...v1.13.2) (2026-08-29)
+
+
+### Bug Fixes
+
+* reliable local rings — reconnect forever, in-place CTPP re-registration, no-answer on-ring snapshot ([4401e88](https://github.com/simllll/hass-comelit-icona/commit/4401e88969ad50d844db261dda2789da5ade2625))
+
 ## [1.13.1](https://github.com/simllll/hass-comelit-icona/compare/v1.13.0...v1.13.1) (2026-08-27)
 
 
