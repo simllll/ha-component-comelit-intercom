@@ -530,8 +530,85 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             with contextlib.suppress(Exception):
                 await client.disconnect()
 
+    def _is_peer_door(self, door: dict) -> bool:
+        """True if *door* uses the ``opendoor-action: peer`` (1456S/6741W TAP) path."""
+        up = (self.vip_config or {}).get("user-parameters", {})
+        oi = door.get("output-index")
+        return any(
+            isinstance(a, dict)
+            and a.get("action") == "peer"
+            and a.get("output-index") == oi
+            for a in up.get("opendoor-actions", [])
+        )
+
+    async def _open_peer_door_on_shared(self, door: dict) -> None:
+        """Run the peer/TAP door-open over the SHARED held CTPP (issue #64).
+
+        The legacy peer/TAP path opens a second, short-lived CTPP registration.
+        On the 6741W that ephemeral peer registration leaves stale device state
+        so only the first open works and the next is reset ([Errno 32] Broken
+        pipe) until a reload. Sending the identical TAP frames on the one
+        persistent CTPP the coordinator already holds avoids creating that
+        transient registration at all. The doorbell listener is paused for the
+        few frames (same as a video call borrowing CTPP) and resumed after.
+        """
+        from .icona.tap_door import build_peer_open_frames
+
+        client = self._shared_client
+        if client is None or not client.connected:
+            raise RuntimeError("shared connection not available")
+        ctpp = client.get_channel("CTPP")
+        if ctpp is None:
+            raise RuntimeError("shared CTPP channel not open")
+
+        seed = int(time.time()) & 0xFFFFFFFF
+        reg_frame, door_frames = build_peer_open_frames(
+            self.vip_config, door, start_token=seed, reg_cid=seed & 0xFFFF
+        )
+
+        async with self._ctpp_lock:
+            events = self.events_manager
+            if events is not None:
+                with contextlib.suppress(Exception):
+                    await events.async_pause_local()
+            try:
+                await client.send_binary(ctpp, reg_frame)
+                await asyncio.sleep(0.20)
+                for frame in door_frames:
+                    await client.send_binary(ctpp, frame)
+                await asyncio.sleep(1.0)
+                _LOGGER.info(
+                    "Peer/TAP door '%s' opened via shared CTPP", door.get("name")
+                )
+            finally:
+                if events is not None:
+                    with contextlib.suppress(Exception):
+                        await events.async_resume_local()
+
     async def async_open_door(self, door_name: str) -> None:
         """Open a specific door."""
+        # Find the door
+        doors = self.data.get("doors", [])
+        door = next((d for d in doors if d.get("name") == door_name), None)
+        if not door:
+            raise Exception(f"Door '{door_name}' not found")
+
+        # Peer/TAP doors (1456S/6741W): prefer the shared held CTPP so we don't
+        # open a second, short-lived CTPP registration (issue #64). Fall back to
+        # the legacy short-lived client if the shared connection isn't up or the
+        # shared attempt fails, so no device regresses.
+        if self._is_peer_door(door) and self._shared_client and self._shared_client.connected:
+            try:
+                await self._open_peer_door_on_shared(door)
+                return
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Peer door '%s' via shared CTPP failed (%s) — falling back to "
+                    "short-lived client",
+                    door_name,
+                    err,
+                )
+
         # Create a separate client instance for door operations
         # to avoid interfering with the coordinator's update cycle
         door_client = IconaBridgeClient(self.host, self.port)
@@ -542,12 +619,6 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             auth_code = await door_client.authenticate(self.token)
             if auth_code != 200:
                 raise Exception(f"Authentication failed with code {auth_code}")
-
-            # Find the door
-            doors = self.data.get("doors", [])
-            door = next((d for d in doors if d.get("name") == door_name), None)
-            if not door:
-                raise Exception(f"Door '{door_name}' not found")
 
             # Open the door
             await door_client.open_door(self.vip_config, door)
