@@ -255,10 +255,16 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # VIP listener uses for its keepalive ACKs (init_ts + 0x01010000).
         renewal_ack_ts = (self._ctpp_init_ts + _VIP_ACK_TS_INCR) & 0xFFFFFFFF
         auto_answer = self.entry.options.get(CONF_AUTO_ANSWER, False)
+        # Without auto-answer we only want a snapshot, so use preview mode: grab
+        # the frame WITHOUT sending call_accepted, so the entrance never shows
+        # the ring as answered. With auto-answer we run the full accept (needed
+        # for two-way audio), which does show as answered.
+        preview_only = not auto_answer
         ring_at = self.hass.loop.time()
         try:
             ok = await self.stream.async_start_inbound(
-                entrance_addr, ring_ts, renewal_ack_ts=renewal_ack_ts
+                entrance_addr, ring_ts, renewal_ack_ts=renewal_ack_ts,
+                preview_only=preview_only,
             )
             if not ok:
                 return
