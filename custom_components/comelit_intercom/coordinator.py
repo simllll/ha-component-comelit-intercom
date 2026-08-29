@@ -45,9 +45,12 @@ from .video_stream import ComelitStreamManager
 
 _LOGGER = logging.getLogger(__name__)
 
-# Keepalive cadence — well under the client's 300s idle timeout and the panel's
-# ~120s renewal cycle, so the connection never goes idle-dead when nothing rings.
-_KEEPALIVE_INTERVAL = 90
+# CTPP re-registration cadence. The panel silently expires our ring
+# registration if we don't periodically re-assert it — after which the socket
+# stays up but no rings arrive. Re-registering on this cadence keeps it fresh
+# and, because it exchanges packets, doubles as the socket keepalive (well under
+# the client's 300s idle timeout, aligned with the panel's ~120s renewal cycle).
+_KEEPALIVE_INTERVAL = 120
 # Reconnect backoff bounds — the panel can be unreachable/degraded for a while
 # (network blip, reboot); we keep retrying (5s → … → 60s cap) until it's back.
 _RECONNECT_BACKOFF_START = 5
@@ -77,11 +80,15 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # listener derives its outgoing ACK timestamps from this.
         self._ctpp_init_ts: int = 0
         self._reconnecting = False
-        # Proactive keepalive: the panel sleeps when idle and stops sending, so
-        # the receive-loop's 300s idle timeout fires and churns a reconnect
-        # every ~5 min. A periodic benign server-info query keeps the panel
-        # replying (resets the idle timer) — the same benign query the app
-        # sends, with no push-enrollment side effect.
+        # Proactive keepalive: the panel silently expires our CTPP ring
+        # registration if we don't periodically re-assert it. Before, the
+        # registration only got refreshed as a side effect of a full reconnect
+        # (the receive-loop's 300s idle timeout churned one every ~5 min). A
+        # benign server-info keepalive stopped that churn but ALSO stopped the
+        # implicit re-registration — the socket stayed up while rings silently
+        # stopped arriving. So the keepalive now re-runs the CTPP init handshake
+        # in place (no TCP churn), which both re-registers and keeps the socket
+        # from going idle-dead.
         self._keepalive_task: asyncio.Task[None] | None = None
         # Set on entry unload so the (now indefinite) reconnect loop stops.
         self._shutdown = False
@@ -374,16 +381,18 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._keepalive_task = None
 
     async def _keepalive_loop(self) -> None:
-        """Ping the panel with a benign server-info query every _KEEPALIVE_INTERVAL.
+        """Re-assert the CTPP ring registration every _KEEPALIVE_INTERVAL.
 
-        The panel replies, resetting the receive-loop idle timer, so the shared
-        connection stays up instead of churning a reconnect every idle cycle. The
-        probe reuses a single long-lived INFO channel (no per-probe open/close
-        churn). Skipped while a video/inbound session is active (media already
-        keeps the socket busy). On failure it actively triggers a reconnect
-        rather than assuming the receive loop will — a half-open socket can leave
-        the receive loop blocked while the panel silently stopped delivering
-        rings, so the keepalive is the health check that recovers it.
+        The panel expires our registration if we don't periodically re-assert
+        it; once expired the socket stays up but no rings are delivered. So this
+        re-runs the CTPP init handshake in place (see _reregister_ctpp), which
+        re-registers AND — because it exchanges packets with the panel — resets
+        the receive-loop idle timer, so the connection never goes idle-dead.
+        Skipped while a video/inbound session is active (it has borrowed the
+        CTPP channel). On failure it forces a full reconnect rather than assuming
+        the receive loop will — a half-open socket can leave the receive loop
+        blocked while the panel silently stopped delivering rings, so this is the
+        health check that recovers it.
         """
         while True:
             await asyncio.sleep(_KEEPALIVE_INTERVAL)
@@ -394,14 +403,49 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 continue
             try:
                 async with self._ctpp_lock:
-                    await asyncio.wait_for(client.server_info_keepalive(), timeout=10.0)
-                _LOGGER.debug("Keepalive OK")
+                    await asyncio.wait_for(self._reregister_ctpp(client), timeout=20.0)
+                _LOGGER.debug("Keepalive OK (CTPP re-registered)")
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
                 _LOGGER.warning("Keepalive failed — forcing reconnect", exc_info=True)
                 self._on_shared_disconnect()
                 return
+
+    async def _reregister_ctpp(self, client: SharedIconaClient) -> None:
+        """Re-assert the CTPP ring registration in place (no TCP churn).
+
+        Runs the same CTPP init handshake a fresh reconnect does — the only
+        thing empirically observed to refresh the panel's ring registration —
+        but on the existing authenticated connection and channel. To avoid the
+        VIP listener's read loop stealing the init responses off the shared CTPP
+        response queue, the listener is briefly detached for the handshake and
+        re-attached on the freshly re-registered channel (with the new init_ts,
+        from which it derives its renewal-ACK timestamps).
+
+        Must be called holding ``_ctpp_lock`` so it can't race a video start.
+        """
+        ctpp = client.get_channel("CTPP")
+        if ctpp is None:
+            raise RuntimeError("CTPP channel gone — cannot re-register")
+        vip = self.vip_config or {}
+        apt = vip.get("apt-address", "")
+        sub = vip.get("apt-subaddress", 0)
+        our_addr = f"{apt}{sub}"
+
+        # Detach the listener so ctpp_init_sequence owns the CTPP response queue
+        # for the handshake (the init responses must not be processed as events).
+        if self.events_manager is not None:
+            with contextlib.suppress(Exception):
+                await self.events_manager.async_detach_local()
+
+        ts = int(time.time()) & 0xFFFFFFFF
+        await ctpp_init_sequence(client, ctpp, apt, sub, our_addr, ts)
+        self._ctpp_init_ts = ts
+
+        # Re-attach on the freshly re-registered CTPP (uses the new init_ts).
+        if self.events_manager is not None:
+            await self.events_manager.async_attach_local()
 
     def _on_shared_disconnect(self) -> None:
         """Called by the shared client when its TCP connection drops.

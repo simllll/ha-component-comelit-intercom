@@ -9,7 +9,7 @@ import socket
 import struct
 from collections.abc import Callable
 
-from .channels import Channel, ChannelType, ViperMessageId
+from .channels import Channel, ChannelType
 from .const import is_verbose_logging
 from .exceptions import ConnectionComelitError, ProtocolError
 from .protocol import (
@@ -504,34 +504,6 @@ class IconaBridgeClient:
         """Return an open channel by name, or None if not open."""
         ch = self._channels.get(name)
         return ch if ch is not None and ch.is_open else None
-
-    async def server_info_keepalive(self) -> dict | None:
-        """Benign server-info probe used as a connection keepalive.
-
-        The panel replies with a JSON packet, resetting the receive-loop idle
-        timer, so the connection doesn't go idle-dead. No side effects (unlike
-        push-info, which re-enrolls the cloud-push token).
-
-        Reuses a single long-lived INFO channel for the connection's lifetime
-        instead of opening+closing one per probe — thousands of open/close
-        cycles on one persistent connection appears to degrade the panel over
-        time (it starts dropping connections). The channel dies with the
-        connection; the next probe after a reconnect reopens it lazily. Raises
-        on a dead connection so the caller can force a reconnect.
-        """
-        channel = self.get_channel("INFO_KA")
-        if channel is None:
-            channel = await self.open_channel(
-                "INFO_KA", ChannelType.INFO, wire_name="INFO"
-            )
-        return await self.send_json(
-            channel,
-            {
-                "message": "server-info",
-                "message-type": "request",
-                "message-id": int(ViperMessageId.SERVER_INFO),
-            },
-        )
 
     def set_push_callback(self, callback: Callable[[dict], None] | None) -> None:
         """Set a callback for push notifications (unsolicited JSON messages)."""
