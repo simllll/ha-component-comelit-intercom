@@ -211,7 +211,8 @@ class ComelitStreamManager:
     # --- inbound (device-initiated ring answer) --------------------------
 
     async def async_start_inbound(
-        self, entrance: str, ring_ts: int, renewal_ack_ts: int = 0
+        self, entrance: str, ring_ts: int, renewal_ack_ts: int = 0,
+        preview_only: bool = False,
     ) -> bool:
         """Answer a device-initiated ring and start two-way media.
 
@@ -219,6 +220,9 @@ class ComelitStreamManager:
         client + held CTPP, hold the RTSP server) but drives the PCAP-verified
         20-step inbound answer sequence instead of the outbound one. Returns
         True on success.
+
+        preview_only: grab the stream WITHOUT sending call_accepted, so the
+        entrance never shows the ring as answered (true-preview experiment).
         """
         async with self._lock:
             client = self._get_shared_client()
@@ -259,7 +263,8 @@ class ComelitStreamManager:
                 )
                 try:
                     await session.start_inbound(
-                        entrance, ring_ts, renewal_ack_ts=renewal_ack_ts
+                        entrance, ring_ts, renewal_ack_ts=renewal_ack_ts,
+                        preview_only=preview_only,
                     )
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.warning("Inbound call answer failed: %s", err)
@@ -276,7 +281,11 @@ class ComelitStreamManager:
             self._entrance = entrance
             self._touch()
             self._arm_idle_monitor()
-            _LOGGER.info("Inbound video call answered (entrance %s)", entrance)
+            _LOGGER.info(
+                "Inbound video %s (entrance %s)",
+                "preview started (no accept)" if preview_only else "call answered",
+                entrance,
+            )
             return True
 
     async def async_answer_inbound(self) -> bool:

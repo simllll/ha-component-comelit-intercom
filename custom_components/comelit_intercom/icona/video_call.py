@@ -917,13 +917,22 @@ class VideoCallSession:
             _LOGGER.info("Answer peer/accept (0x70) sent — audio should start within ~400ms")
 
     async def start_inbound(
-        self, entrance_addr: str, ring_ts: int, renewal_ack_ts: int = 0
+        self, entrance_addr: str, ring_ts: int, renewal_ack_ts: int = 0,
+        preview_only: bool = False,
     ) -> RtpReceiver:  # noqa: C901
         """Execute the inbound call answer sequence (PCAP2-verified, steps 1-20).
 
         Called when the device initiates a ring (PREFIX_CALL_INIT). Reuses the
         existing CTPP channel opened by the coordinator VIP listener.
         Does NOT start audio — call answer_inbound() separately.
+
+        preview_only: run the media setup through video-config (which requests
+        the stream) but STOP before the PEER + call_accepted messages — i.e.
+        never signal the entrance that the call was answered. This is the
+        "true preview" experiment: if the device streams video after
+        video-config but before accept, we can grab a snapshot without the
+        panel showing "answered". If it doesn't, media is gated on accept and
+        no frame arrives (logged). No two-way audio in this mode.
         """
         client = self._client
         try:
@@ -1080,6 +1089,26 @@ class VideoCallSession:
                 encode_video_config(our_addr, our_base_addr, media_req_id, call_counter, width=320, height=240),
             )
             await asyncio.sleep(0.4)
+
+            if preview_only:
+                # TRUE-PREVIEW experiment: video-config above already asked the
+                # entrance for the stream. Do NOT send PEER/call_accepted, so
+                # the panel never registers the ring as answered. Start the
+                # media router and see whether the device streams video
+                # pre-accept (grabbable as a snapshot) or gates it on accept.
+                self._tcp_task = asyncio.create_task(
+                    self._tcp_inbound_media_router(client, rtpc1, rtpc2, receiver)
+                )
+                self._call_counter = call_counter
+                self._active = True
+                got_video = await receiver.wait_for_first_video(VIDEO_READY_TIMEOUT)
+                _LOGGER.info(
+                    "Inbound PREVIEW (no accept sent): device %s video pre-accept",
+                    "STREAMED" if got_video else "did NOT stream",
+                )
+                if self._auto_timeout:
+                    self._timeout_task = asyncio.create_task(self._auto_timeout_loop())
+                return receiver
 
             # Step 13: PEER message — inbound=True uses 48B format with our_base_addr as callee
             call_counter = (call_counter + _CTR_INCR_BYTE4) & 0xFFFFFFFF
