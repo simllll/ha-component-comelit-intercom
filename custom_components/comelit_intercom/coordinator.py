@@ -559,8 +559,71 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Always clean up the door client connection
             await door_client.shutdown()
 
+    async def _open_actuator_on_shared(self, actuator: dict) -> None:
+        """Trigger an actuator over the SHARED held CTPP (no 2nd registration).
+
+        A standalone actuator open on a separate short-lived client registers a
+        second CTPP on the same ViP identity; the panel allows only one, so it
+        resets the shared connection on every press (churn, unreliable opens,
+        dropped rings — see the Schranke reports). Sending the same 0x45be
+        actuator frames on the already-registered shared CTPP avoids that. The
+        doorbell listener is paused for the few frames and resumed after, like a
+        video call borrowing the shared CTPP.
+        """
+        from .icona.actuator_open import build_actuator_open_frames
+
+        client = self._shared_client
+        if client is None or not client.connected:
+            raise RuntimeError("shared connection not available")
+        ctpp = client.get_channel("CTPP")
+        if ctpp is None:
+            raise RuntimeError("shared CTPP channel not open")
+
+        init, open_cmd, confirm = build_actuator_open_frames(self.vip_config, actuator)
+        async with self._ctpp_lock:
+            events = self.events_manager
+            if events is not None:
+                with contextlib.suppress(Exception):
+                    await events.async_pause_local()
+            try:
+                await client.send_binary(ctpp, init)
+                await asyncio.sleep(0.25)
+                await client.send_binary(ctpp, open_cmd)
+                await client.send_binary(ctpp, confirm)
+                await asyncio.sleep(0.3)
+                _LOGGER.info(
+                    "Actuator '%s' opened via shared CTPP", actuator.get("name")
+                )
+            finally:
+                if events is not None:
+                    with contextlib.suppress(Exception):
+                        await events.async_resume_local()
+
     async def async_open_actuator(self, actuator_name: str) -> None:
         """Trigger a specific actuator (gate/barrier)."""
+        actuators = self.data.get("actuators", [])
+        actuator = next(
+            (a for a in actuators if a.get("name") == actuator_name), None
+        )
+        if not actuator:
+            raise Exception(f"Actuator '{actuator_name}' not found")
+
+        # Prefer the shared held CTPP so we don't open a second CTPP
+        # registration (which the panel punishes by resetting the shared
+        # connection on every press). Fall back to the legacy short-lived client
+        # if the shared connection isn't up or the shared attempt fails.
+        if self._shared_client is not None and self._shared_client.connected:
+            try:
+                await self._open_actuator_on_shared(actuator)
+                return
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Actuator '%s' via shared CTPP failed (%s) — falling back to "
+                    "short-lived client",
+                    actuator_name,
+                    err,
+                )
+
         # Separate client instance, like door operations
         actuator_client = IconaBridgeClient(self.host, self.port)
         try:
@@ -569,13 +632,6 @@ class ComelitDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             auth_code = await actuator_client.authenticate(self.token)
             if auth_code != 200:
                 raise Exception(f"Authentication failed with code {auth_code}")
-
-            actuators = self.data.get("actuators", [])
-            actuator = next(
-                (a for a in actuators if a.get("name") == actuator_name), None
-            )
-            if not actuator:
-                raise Exception(f"Actuator '{actuator_name}' not found")
 
             await actuator_client.open_actuator(self.vip_config, actuator)
 
